@@ -1,6 +1,6 @@
 import { store, subscribe } from './store.js';
 import { MENU_ROOT } from './genres.js';
-import * as haptics from './haptics.js'; // <--- НОВЫЙ ИМПОРТ
+import * as haptics from './haptics.js';
 
 let menuStack = [];
 
@@ -57,7 +57,7 @@ function renderMenu() {
     backBtn.className = 'nav-btn';
     backBtn.innerHTML = '<span class="material-icons-round">arrow_back_ios_new</span>';
     backBtn.onclick = () => { 
-        haptics.impact('light'); // <--- HAPTIC
+        haptics.impact('light');
         if (!current.isRoot) { menuStack.pop(); renderMenu(); } 
     };
     backBtn.style.visibility = current.isRoot ? 'hidden' : 'visible';
@@ -89,11 +89,10 @@ function renderMenu() {
 
         const arrowHtml = item.children ? '<span class="material-icons-round row-arrow">chevron_right</span>' : '';
 
-        // Template Literal используется корректно
         row.innerHTML = `<div class="row-left">${iconHtml}<span class="row-title">${item.name}</span></div>${arrowHtml}`;
         
         row.onclick = () => {
-            haptics.impact('light'); // <--- HAPTIC
+            haptics.impact('light');
             row.classList.add('clicked');
             setTimeout(() => row.classList.remove('clicked'), 200);
             if (item.children) {
@@ -123,7 +122,6 @@ function renderPlaylist(playlist, currentIndex, player) {
         item.className = `playlist-row ${idx === currentIndex ? 'active' : ''}`;
         const iconType = idx === currentIndex ? 'equalizer' : 'music_note';
         
-        // --- 🛑 FIX: ИСПРАВЛЕНА СИНТАКСИЧЕСКАЯ ОШИБКА (BACKTICKS) ---
         item.innerHTML = `
             <div class="p-icon-box"><span class="material-icons-round">${iconType}</span></div>
             <div class="p-info">
@@ -131,10 +129,9 @@ function renderPlaylist(playlist, currentIndex, player) {
                 <div class="p-artist">${track.artist}</div>
             </div>
         `;
-        // -----------------------------------------------------------
-
+        
         item.onclick = () => { 
-            haptics.impact('medium'); // <--- HAPTIC
+            haptics.impact('medium');
             player.playTrack(idx); 
             toggleDrawer('playlist', false); 
         };
@@ -150,7 +147,7 @@ function toggleDrawer(name, show) {
     const dPlaylist = getEl('drawer-playlist');
     
     if (show) {
-        haptics.impact('medium'); // <--- HAPTIC
+        haptics.impact('medium');
         if(overlay) overlay.classList.add('active');
         if (name === 'genres') { 
             if(dGenres) dGenres.classList.add('active'); 
@@ -184,7 +181,9 @@ function initialize(player) {
 
     subscribe('playlist', (list) => renderPlaylist(list, store.currentTrackIndex, player));
 
+    // --- ОБЪЯВЛЕНИЕ ПЕРЕМЕННОЙ AUDIO (ОДИН РАЗ!) ---
     const audio = player.getAudioElement();
+
     audio.addEventListener('timeupdate', () => {
         if (!audio.duration) return;
         const pct = (audio.currentTime / audio.duration) * 100;
@@ -199,7 +198,7 @@ function initialize(player) {
     const pContainer = document.querySelector('.progress-container');
     if(pContainer) {
         pContainer.onclick = (e) => {
-            haptics.impact('light'); // <--- HAPTIC
+            haptics.impact('light');
             const rect = pContainer.getBoundingClientRect();
             const p = (e.clientX - rect.left) / rect.width;
             player.seek(p);
@@ -209,7 +208,7 @@ function initialize(player) {
     const bind = (id, fn) => { 
         const el = getEl(id); 
         if(el) el.onclick = () => {
-            haptics.impact('light'); // <--- HAPTIC DEFAULT
+            haptics.impact('light');
             fn();
         }; 
     };
@@ -224,7 +223,7 @@ function initialize(player) {
     const btnFx = getEl('btn-fx');
     if(btnFx) {
         btnFx.onclick = () => {
-            haptics.impact('medium'); // <--- HAPTIC
+            haptics.impact('medium');
             const isActive = player.toggleBassBoost();
             btnFx.style.color = isActive ? '#00f2ff' : '#666';
             btnFx.style.textShadow = isActive ? '0 0 10px #00f2ff' : 'none';
@@ -239,29 +238,25 @@ function initialize(player) {
     // --- VOLUME LOGIC ---
     const volBg = getEl('vol-bg');
     const volFill = getEl('vol-fill');
-    const audio = player.getAudioElement();
+    
+    // Переменная audio уже объявлена выше, используем ее.
+    // const audio = player.getAudioElement(); // Эту строку убираем!
     
     if (volBg && volFill) {
-        // Установка начальной громкости
         if (localStorage.getItem('aurora_volume')) {
             audio.volume = parseFloat(localStorage.getItem('aurora_volume'));
         }
         volFill.style.width = (audio.volume * 100) + '%';
 
-        // Обработчик клика/драга
         const updateVolume = (e) => {
             const rect = volBg.getBoundingClientRect();
             let p = (e.clientX - rect.left) / rect.width;
-            p = Math.max(0, Math.min(1, p)); // Clamp 0..1
-            
+            p = Math.max(0, Math.min(1, p));
             audio.volume = p;
             volFill.style.width = (p * 100) + '%';
             localStorage.setItem('aurora_volume', p);
-            
-            // Если звук выключен - иконка меняется (опционально)
         };
 
-        // Поддержка свайпов и кликов
         let isVolDragging = false;
         volBg.addEventListener('mousedown', (e) => { isVolDragging = true; updateVolume(e); });
         volBg.addEventListener('touchstart', (e) => { isVolDragging = true; updateVolume(e.touches[0]); });
@@ -273,12 +268,16 @@ function initialize(player) {
         document.addEventListener('touchend', () => isVolDragging = false);
     }
     
-    // Mute/Max buttons
     const btnMute = getEl('icon-vol-mute');
     const btnMax = getEl('icon-vol-max');
-    
+    // Используем уже объявленную переменную audio
     if(btnMute) btnMute.onclick = () => { audio.volume = 0; volFill.style.width = '0%'; };
     if(btnMax) btnMax.onclick = () => { audio.volume = 1; volFill.style.width = '100%'; };
+    
+    subscribe('isPlaying', (playing) => {
+        const icon = document.querySelector('#btn-play-pause span');
+        if(icon) icon.textContent = playing ? 'pause' : 'play_arrow';
+    });
 }
 
 function formatTime(s) {
