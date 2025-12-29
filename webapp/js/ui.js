@@ -235,6 +235,50 @@ function initialize(player) {
         const icon = document.querySelector('#btn-play-pause span');
         if(icon) icon.textContent = playing ? 'pause' : 'play_arrow';
     });
+
+    // --- VOLUME LOGIC ---
+    const volBg = getEl('vol-bg');
+    const volFill = getEl('vol-fill');
+    const audio = player.getAudioElement();
+    
+    if (volBg && volFill) {
+        // Установка начальной громкости
+        if (localStorage.getItem('aurora_volume')) {
+            audio.volume = parseFloat(localStorage.getItem('aurora_volume'));
+        }
+        volFill.style.width = (audio.volume * 100) + '%';
+
+        // Обработчик клика/драга
+        const updateVolume = (e) => {
+            const rect = volBg.getBoundingClientRect();
+            let p = (e.clientX - rect.left) / rect.width;
+            p = Math.max(0, Math.min(1, p)); // Clamp 0..1
+            
+            audio.volume = p;
+            volFill.style.width = (p * 100) + '%';
+            localStorage.setItem('aurora_volume', p);
+            
+            // Если звук выключен - иконка меняется (опционально)
+        };
+
+        // Поддержка свайпов и кликов
+        let isVolDragging = false;
+        volBg.addEventListener('mousedown', (e) => { isVolDragging = true; updateVolume(e); });
+        volBg.addEventListener('touchstart', (e) => { isVolDragging = true; updateVolume(e.touches[0]); });
+        
+        document.addEventListener('mousemove', (e) => { if(isVolDragging) updateVolume(e); });
+        document.addEventListener('touchmove', (e) => { if(isVolDragging) updateVolume(e.touches[0]); });
+        
+        document.addEventListener('mouseup', () => isVolDragging = false);
+        document.addEventListener('touchend', () => isVolDragging = false);
+    }
+    
+    // Mute/Max buttons
+    const btnMute = getEl('icon-vol-mute');
+    const btnMax = getEl('icon-vol-max');
+    
+    if(btnMute) btnMute.onclick = () => { audio.volume = 0; volFill.style.width = '0%'; };
+    if(btnMax) btnMax.onclick = () => { audio.volume = 1; volFill.style.width = '100%'; };
 }
 
 function formatTime(s) {
