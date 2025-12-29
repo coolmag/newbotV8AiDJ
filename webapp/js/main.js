@@ -67,28 +67,50 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // 3. Start Button
+    // 3. Start Button (Mobile Optimized)
     const startBtn = document.getElementById('btn-start-system');
     const startOverlay = document.getElementById('start-overlay');
 
-    if (startBtn) {
-        startBtn.onclick = async () => {
-            logger.print('SYSTEM STARTUP...', 'loading');
-            if (startOverlay) {
-                startOverlay.style.opacity = '0';
-                setTimeout(() => startOverlay.remove(), 500);
+    const handleStart = async (e) => {
+        // Предотвращаем двойное срабатывание (и touch и click)
+        if (e && e.cancelable) e.preventDefault();
+        
+        // --- AUDIO UNLOCK FOR MOBILE ---
+        // Важно: создать или возобновить контекст СРАЗУ по клику
+        const audio = Player.getAudioElement();
+        try {
+            // Пытаемся проиграть тишину, чтобы iOS разблокировал звук
+            if (audio.paused) {
+                audio.play().then(() => {
+                    audio.pause();
+                    audio.currentTime = 0;
+                }).catch(err => console.log("Audio unlock interaction:", err));
             }
+        } catch (e) { console.warn("Audio unlock failed", e); }
+        // -------------------------------
 
-            try {
-                const audio = Player.getAudioElement();
-                await Visualizer.initialize(audio);
-                logger.print('AUDIO CORE ONLINE', 'success');
-            } catch (e) {
-                logger.print('AUDIO INIT FAIL: ' + e.message, 'error');
-            }
-            
-            window.loadGenreHandler('lofi hip hop radio');
-        };
+        logger.print('SYSTEM STARTUP...', 'loading');
+        
+        if (startOverlay) {
+            startOverlay.style.opacity = '0';
+            setTimeout(() => startOverlay.remove(), 500);
+        }
+
+        try {
+            await Visualizer.initialize(audio);
+            logger.print('AUDIO CORE ONLINE', 'success');
+        } catch (e) {
+            logger.print('AUDIO INIT FAIL: ' + e.message, 'error');
+        }
+        
+        // Запускаем музыку
+        window.loadGenreHandler('lofi hip hop radio');
+    };
+
+    if (startBtn) {
+        // Вешаем и клик, и тач - для надежности на всех устройствах
+        startBtn.addEventListener('click', handleStart);
+        startBtn.addEventListener('touchstart', handleStart, { passive: false });
     }
 
     // 4. Load Genre
