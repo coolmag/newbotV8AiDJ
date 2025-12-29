@@ -1,10 +1,9 @@
-const CACHE_NAME = 'aurora-player-v28';
+const CACHE_NAME = 'aurora-player-v8.5';
 const ASSETS = [
     './', './index.html', './style.css',
     './js/main.js', './js/api.js', './js/player.js',
-    './js/store.js', './js/ui.js', './js/genres.js', './js/visualizer.js',
-    './js/haptics.js', './js/ai.js', // Не забудьте новые файлы
-    './favicon.svg'
+    './js/store.js', './js/ui.js', './js/genres.js', 
+    './js/visualizer.js', './js/haptics.js', './js/ai.js'
 ];
 
 self.addEventListener('install', e => {
@@ -13,7 +12,6 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-    // Удаляем старые кэши (v11, v12 и т.д.)
     e.waitUntil(caches.keys().then(k => Promise.all(
         k.map(n => n !== CACHE_NAME ? caches.delete(n) : null)
     )).then(() => self.clients.claim()));
@@ -21,7 +19,6 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
     if (e.request.method !== 'GET') return;
-    // API и аудио всегда берем из сети
     if (e.request.url.includes('/api/') || e.request.url.includes('/audio/')) {
         e.respondWith(fetch(e.request));
         return;
