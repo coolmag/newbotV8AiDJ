@@ -78,10 +78,9 @@ function updateMediaSession() {
         title: track.title,
         artist: track.artist,
         album: 'Aurora AI Radio',
-        artwork: [
-            { src: 'https://cdn-icons-png.flaticon.com/512/4430/4430494.png', sizes: '512x512', type: 'image/png' }
-            // Можно добавить реальную обложку трека, если она есть в track.thumbnail_url
-        ]
+        artwork: track.thumbnail_url 
+            ? [{ src: track.thumbnail_url, sizes: '512x512', type: 'image/jpeg' }]
+            : [{ src: 'https://cdn-icons-png.flaticon.com/512/4430/4430494.png', sizes: '512x512', type: 'image/png' }]
     });
 
     // 2. Обработчики кнопок (Lock Screen Controls)
