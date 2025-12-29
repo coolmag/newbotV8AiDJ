@@ -25,7 +25,7 @@ def get_now_playing_message(track: TrackInfo, genre_name: str, decade: Optional[
     artist = track.artist[:30].strip()
     return f"{icon} *{title}*\n👤 {artist}\n⏱ {format_duration(track.duration)} | 📻 _{genre_name}_"
 
- @dataclass
+@dataclass
 class RadioSession:
     chat_id: int
     bot: Bot
@@ -67,7 +67,7 @@ class RadioSession:
             else:
                 self.status_message = await self.bot.send_message(self.chat_id, text, parse_mode=ParseMode.MARKDOWN)
         except Exception: 
-            self.status_message = None # Если сообщение удалено юзером, создадим новое при следующем треке
+            self.status_message = None 
 
     async def _delete_status(self):
         if self.status_message:
@@ -80,9 +80,7 @@ class RadioSession:
         await self._update_status(f"📡 Сканирование эфира: *{self.display_name}*...")
         
         try:
-            # Ищем чуть больше треков
             tracks = await self.downloader.search(target_query, decade=self.decade, limit=25)
-            # Исключаем уже прослушанные
             new_tracks = [t for t in tracks if t.identifier not in self.played_ids]
             
             if new_tracks:
@@ -95,7 +93,6 @@ class RadioSession:
             logger.error(f"[{self.chat_id}] Search error: {e}")
 
     async def _activate_emergency_protocol(self):
-        """Если совсем всё плохо - включаем мировые хиты."""
         fallbacks = [
             ("Global Top 50", "top 50 global hits"),
             ("Summer Hits", "summer hits 2024"),
@@ -109,62 +106,50 @@ class RadioSession:
     async def _radio_loop(self):
         while self.is_running:
             try:
-                # 1. Если плейлист пуст -> пополняем
                 if len(self.playlist) < 3:
                     await self._fill_playlist()
                 
-                # 2. Если всё еще пуст -> Аварийный протокол (не выключаемся!)
                 if not self.playlist:
                     await self._activate_emergency_protocol()
                     if not self.playlist:
-                        # Если даже аварийный пуст, ждем 10 сек и пробуем снова (Loop Protection)
                         await asyncio.sleep(10)
                         continue
 
-                # 3. Берем трек
                 track = self.playlist.pop(0)
                 self.played_ids.add(track.identifier)
-                # Чистим историю, чтобы не переполнять память
                 if len(self.played_ids) > 300: 
                     self.played_ids = set(list(self.played_ids)[150:])
 
-                # 4. Играем
                 success = await self._play_track(track)
                 
                 if success:
                     self.consecutive_errors = 0
                     self.tracks_played += 1
-                    # Ждем пока трек доиграет или будет скипнут
-                    # Тайм-аут чуть меньше длительности трека, чтобы начать грузить следующий заранее? 
-                    # Нет, тут просто ждем ивента.
                     try:
-                        # Ждем событие skip или просто паузу между треками (эмуляция прослушивания)
-                        # В реальности мы не знаем когда трек кончился в Telegram, 
-                        # поэтому просто ждем ~80% длительности трека или 3 минуты макс
                         wait_time = min(track.duration, 180) 
                         await asyncio.wait_for(self.skip_event.wait(), timeout=wait_time)
                     except asyncio.TimeoutError:
-                        pass # Трек доиграл (условно)
+                        pass
                 else:
                     self.consecutive_errors += 1
                     logger.warning(f"[{self.chat_id}] Error playing track. Streak: {self.consecutive_errors}")
-                    await asyncio.sleep(2) # Пауза перед следующей попыткой
+                    await asyncio.sleep(2)
                     
                 self.skip_event.clear()
 
             except asyncio.CancelledError:
-                break # Единственный валидный выход из цикла
+                break
             except Exception as e:
                 logger.error(f"[{self.chat_id}] Loop crash: {e}", exc_info=True)
-                await asyncio.sleep(5) # Защита от спама ошибками
+                await asyncio.sleep(5)
 
         self.is_running = False
 
     async def _play_track(self, track: TrackInfo) -> bool:
+        result: Optional[DownloadResult] = None
         try:
             await self._update_status(f"⬇️ Загрузка: *{track.title}*...")
             
-            # Скачиваем с повторными попытками внутри downloader
             result = await self.downloader.download(track.identifier)
             
             if not result or not result.success: 
@@ -180,7 +165,6 @@ class RadioSession:
                 else:
                     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Открыть плеер", url=base_url)]])
 
-            # Отправка
             if result.file_id:
                 await self.bot.send_audio(self.chat_id, audio=result.file_id, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
             elif result.file_path:
@@ -188,7 +172,6 @@ class RadioSession:
                     msg = await self.bot.send_audio(self.chat_id, audio=f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
                     if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
             
-            # Удаляем статус "загрузка", оставляем трек
             await self._delete_status()
             return True
 
@@ -196,7 +179,6 @@ class RadioSession:
             logger.error(f"Play track error: {e}")
             return False
         finally:
-            # Чистим файл
             if result and result.file_path and os.path.exists(result.file_path):
                 try: os.unlink(result.file_path)
                 except: pass
@@ -213,7 +195,6 @@ class RadioManager:
 
     async def start(self, chat_id: int, query: str, chat_type: Optional[str] = None, display_name: Optional[str] = None, decade: Optional[str] = None):
         async with self._get_lock(chat_id):
-            # Если уже играет, стопаем старое
             if chat_id in self._sessions and self._sessions[chat_id].is_running:
                 await self._sessions[chat_id].stop()
             
