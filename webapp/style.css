@@ -251,3 +251,23 @@ body {
     box-shadow: 0 0 20px rgba(188, 19, 254, 0.5);
 }
 .btn-text { background: none; border: none; color: #888; cursor: pointer; padding: 10px; }
+/* VOLUME CONTROL */
+.volume-container {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin-top: 15px; width: 80%; margin-left: auto; margin-right: auto;
+    opacity: 0.7; transition: opacity 0.3s;
+}
+.volume-container:hover { opacity: 1; }
+
+.volume-container .material-icons-round { font-size: 16px; color: #666; cursor: pointer; }
+
+.volume-slider-bg {
+    flex: 1; height: 4px; background: rgba(255,255,255,0.1);
+    border-radius: 2px; position: relative; cursor: pointer;
+    overflow: hidden; /* Важно для fill */
+}
+
+.volume-slider-fill {
+    height: 100%; background: #00f2ff; width: 100%;
+    border-radius: 2px; pointer-events: none; /* Клики проходят сквозь заливку */
+}

@@ -40,21 +40,28 @@
                 <div class="time-labels"><span id="time-current">0:00</span><span id="time-duration">0:00</span></div>
             </div>
             <div class="controls">
-                <button class="btn" id="btn-shuffle" title="Перемешать"><span class="material-icons-round" style="font-size: 20px; color: #666;">shuffle</span></button>
-                <button class="btn" id="btn-prev"><span class="material-icons-round">skip_previous</span></button>
-                
-                <!-- Кнопка AI -->
-                <button class="btn" id="btn-ai" title="AI DJ">
-                    <span class="material-icons-round" style="color: #bc13fe; text-shadow: 0 0 10px #bc13fe;">psychology</span>
-                </button>
+    <!-- Левая группа -->
+    <button class="btn" id="btn-shuffle" title="Shuffle"><span class="material-icons-round" style="font-size: 20px; color: #666;">shuffle</span></button>
+    <button class="btn" id="btn-prev"><span class="material-icons-round">skip_previous</span></button>
+    
+    <!-- Центр -->
+    <button class="btn btn-main" id="btn-play-pause"><span class="material-icons-round">play_arrow</span></button>
+    
+    <!-- Правая группа -->
+    <button class="btn" id="btn-next"><span class="material-icons-round">skip_next</span></button>
+    
+    <!-- AI и FX -->
+    <button class="btn" id="btn-ai" title="AI DJ"><span class="material-icons-round" style="color: #bc13fe;">psychology</span></button>
+</div>
 
-                <button class="btn btn-main" id="btn-play-pause"><span class="material-icons-round">play_arrow</span></button>
-                
-                <button class="btn" id="btn-next"><span class="material-icons-round">skip_next</span></button>
-                
-                <!-- КНОПКА FX ВМЕСТО ПОВТОРА -->
-                <button class="btn" id="btn-fx" title="Усиление Баса"><span class="material-icons-round" style="font-size: 16px; font-weight: bold; color: #666;">FX</span></button>
-            </div>
+<!-- НОВЫЙ БЛОК: ГРОМКОСТЬ -->
+<div class="volume-container">
+    <span class="material-icons-round" id="icon-vol-mute">volume_down</span>
+    <div class="volume-slider-bg" id="vol-bg">
+        <div class="volume-slider-fill" id="vol-fill" style="width: 100%;"></div>
+    </div>
+    <span class="material-icons-round" id="icon-vol-max">volume_up</span>
+</div>
             <div id="system-log" class="system-log">[ОЖИДАНИЕ]</div>
         </div>
         
