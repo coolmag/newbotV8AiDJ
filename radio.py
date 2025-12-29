@@ -125,15 +125,22 @@ class RadioSession:
                 if success:
                     self.consecutive_errors = 0
                     self.tracks_played += 1
+                    
+                    # Ждем 90 секунд ИЛИ пока трек не будет скипнут
+                    # Если трек короче 90 секунд, ждем остаток
+                    time_to_wait = 90
+                    if track.duration and track.duration < 90:
+                        time_to_wait = track.duration + 5 # Небольшая задержка после короткого трека
+                        if time_to_wait > 90: time_to_wait = 90 # Не ждем больше 90 сек
+
                     try:
-                        wait_time = min(track.duration, 180) 
-                        await asyncio.wait_for(self.skip_event.wait(), timeout=wait_time)
+                        await asyncio.wait_for(self.skip_event.wait(), timeout=time_to_wait)
                     except asyncio.TimeoutError:
-                        pass
+                        pass # Нормальное завершение ожидания
                 else:
                     self.consecutive_errors += 1
                     logger.warning(f"[{self.chat_id}] Error playing track. Streak: {self.consecutive_errors}")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(2) # Пауза перед следующей попыткой
                     
                 self.skip_event.clear()
 
