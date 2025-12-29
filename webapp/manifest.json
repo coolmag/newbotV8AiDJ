@@ -1,0 +1,25 @@
+{
+    "name": "Aurora Player",
+    "short_name": "Aurora",
+    "description": "A clean, modern, and elegant web music player.",
+    "theme_color": "#12121e",
+    "background_color": "#12121e",
+    "display": "standalone",
+    "orientation": "portrait",
+    "scope": "/",
+    "start_url": "./",
+    "icons": [
+        {
+            "src": "assets/icons/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "assets/icons/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ]
+}

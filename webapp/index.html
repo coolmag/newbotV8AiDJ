@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Aurora OS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=20">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+    <div id="debug-log" style="position:fixed; top:0; left:0; right:0; padding: 4px; background: rgba(255,0,0,0.7); color:white; z-index:99999; font-family:monospace; font-size:9px; pointer-events:none;"></div>
+    <canvas id="visualizer-canvas"></canvas>
+    <div id="app-container">
+        <div class="player-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <button class="btn" id="btn-open-genres"><span class="material-icons-round">grid_view</span></button>
+                <span class="title-bar">АВРОРА V6</span>
+                <button class="btn" id="btn-open-playlist"><span class="material-icons-round">playlist_play</span></button>
+            </div>
+            <div class="reactor-container">
+                <div class="reactor-ring"></div>
+                <div class="reactor-ring"></div>
+                <div class="reactor-core">
+                    <span class="material-icons-round" style="font-size: 40px; color: rgba(255,255,255,0.2);">music_note</span>
+                </div>
+            </div>
+            <div class="track-info">
+                <h1 id="track-title">СИСТЕМА ОНЛАЙН</h1>
+                <p id="track-artist">Выберите частоту</p>
+            </div>
+            <div class="progress-container">
+                <div class="progress-bg">
+                    <div id="buffered-fill" style="position:absolute; height:100%; background:rgba(255,255,255,0.1); width:0%;"></div>
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="time-labels"><span id="time-current">0:00</span><span id="time-duration">0:00</span></div>
+            </div>
+            <div class="controls">
+                <button class="btn" id="btn-shuffle" title="Перемешать"><span class="material-icons-round" style="font-size: 20px; color: #666;">shuffle</span></button>
+                <button class="btn" id="btn-prev"><span class="material-icons-round">skip_previous</span></button>
+                
+                <!-- Кнопка AI -->
+                <button class="btn" id="btn-ai" title="AI DJ">
+                    <span class="material-icons-round" style="color: #bc13fe; text-shadow: 0 0 10px #bc13fe;">psychology</span>
+                </button>
+
+                <button class="btn btn-main" id="btn-play-pause"><span class="material-icons-round">play_arrow</span></button>
+                
+                <button class="btn" id="btn-next"><span class="material-icons-round">skip_next</span></button>
+                
+                <!-- КНОПКА FX ВМЕСТО ПОВТОРА -->
+                <button class="btn" id="btn-fx" title="Усиление Баса"><span class="material-icons-round" style="font-size: 16px; font-weight: bold; color: #666;">FX</span></button>
+            </div>
+            <div id="system-log" class="system-log">[ОЖИДАНИЕ]</div>
+        </div>
+        
+        <div id="start-overlay" class="start-screen">
+            <div style="font-family: 'Orbitron'; font-size: 32px; color: #00f2ff; margin-bottom: 10px; text-shadow: 0 0 20px #00f2ff;">АВРОРА</div>
+            <div style="font-family: monospace; font-size: 12px; color: #888; margin-bottom: 30px;">АУДИО-ИНТЕРФЕЙС</div>
+            <button id="btn-start-system" class="start-btn">ЗАПУСК</button>
+        </div>
+        
+        <div class="overlay" id="overlay"></div>
+        <div class="drawer" id="drawer-genres"><h2>Выбор частоты</h2><div class="scroll-area genre-grid" id="genre-grid"></div></div>
+        <div class="drawer" id="drawer-playlist"><h2>Очередь</h2><div class="scroll-area" id="playlist-container"></div></div>
+    </div>
+
+    <div id="ai-modal" class="ai-modal-overlay">
+        <div class="ai-card">
+            <h2 style="font-family: 'Orbitron'; color: #bc13fe;">NEURAL LINK</h2>
+            <input type="text" id="ai-input" placeholder="Например: ночной драйв в Токио..." autocomplete="off">
+            <div class="ai-actions">
+                <button id="btn-ai-cancel" class="btn-text">ОТМЕНА</button>
+                <button id="btn-ai-send" class="btn-glow">ГЕНЕРАЦИЯ</button>
+            </div>
+        </div>
+    </div>
+
+    <audio id="audio-player" crossorigin="anonymous"></audio>
+    <script>
+        if ('serviceWorker' in navigator) navigator.serviceWorker.register('service-worker.js').then(r => r.update());
+        const audio = document.getElementById('audio-player');
+        const bufFill = document.getElementById('buffered-fill');
+        if(audio && bufFill) {
+            audio.addEventListener('progress', () => {
+                if (audio.duration > 0 && audio.buffered.length > 0) {
+                     bufFill.style.width = (audio.buffered.end(audio.buffered.length - 1) / audio.duration * 100) + "%";
+                }
+            });
+        }
+    </script>
+    <script src="js/main.js" type="module"></script>
+</body>
+</html>
