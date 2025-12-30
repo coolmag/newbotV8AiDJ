@@ -13,7 +13,8 @@ from telegram.ext import (
 )
 
 from radio import RadioManager
-from config import Settings, MUSIC_CATALOG
+from config import Settings
+from catalog import MUSIC_CATALOG # NEW IMPORT
 from youtube import YouTubeDownloader
 from keyboards import (
     get_track_search_keyboard, 
@@ -27,83 +28,76 @@ logger = logging.getLogger("handlers")
 # ==================== КОМАНДЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    settings = context.application.settings
-    text = "🎧 *Музыкальный комбайн*\n\nЗапустите плеер или выберите жанр:"
-    
-    keyboard = []
-    # Кнопка WebApp (только для личных сообщений)
-    if update.effective_chat.type == ChatType.PRIVATE:
-        keyboard.append([InlineKeyboardButton("🎧 Открыть плеер", web_app=WebAppInfo(url=settings.BASE_URL))])
-    else:
-        keyboard.append([InlineKeyboardButton("🎧 Открыть плеер (браузер)", url=settings.BASE_URL)])
-    
-    keyboard.append([InlineKeyboardButton("🗂 Меню жанров", callback_data="main_menu_genres")])
-    
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-
-async def player_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет кнопку для запуска веб-плеера."""
-    if update.effective_chat.type == ChatType.CHANNEL:
-        return
-
+    """Обрабатывает команду /start."""
     settings: Settings = context.application.settings
     base_url = settings.BASE_URL.strip() if settings.BASE_URL else ""
     
-    if not base_url or not base_url.startswith("https"):
-        await update.message.reply_text("⚠️ URL плеера не настроен.")
+    text = (
+        "🎧 *Музыкальный комбайн*\n\n"
+        "Нажмите кнопку ниже, чтобы запустить веб-плеер или открыть меню жанров.\n\n"
+        "/play <трек> - поиск\n"
+        "/radio - случайная волна"
+    )
+    
+    keyboard = []
+    
+    # --- БЕЗОПАСНАЯ КНОПКА ЗАПУСКА ---
+    if base_url.startswith("http"):
+        if update.effective_chat.type == ChatType.PRIVATE:
+            # В личке открываем WebApp (красиво)
+            keyboard.append([InlineKeyboardButton("🎧 Открыть плеер", web_app=WebAppInfo(url=base_url))])
+        else:
+            # В группах открываем ссылку (безопасно, не крашит бота)
+            keyboard.append([InlineKeyboardButton("🔗 Открыть плеер", url=base_url)])
+    
+    keyboard.append([InlineKeyboardButton("🗂 Открыть меню жанров", callback_data="main_menu_genres")])
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+
+async def player_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /player"""
+    if update.message.chat.type == ChatType.CHANNEL:
+        await update.message.reply_text("Не работает в каналах.")
         return
 
-    text = "👇 Нажмите кнопку ниже, чтобы открыть плеер."
+    settings: Settings = context.application.settings
+    url = settings.BASE_URL
     
-    # Та же логика безопасности
     if update.effective_chat.type == ChatType.PRIVATE:
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎧 Открыть плеер", web_app=WebAppInfo(url=base_url))]
-        ])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🎧 Открыть плеер", web_app=WebAppInfo(url=url))]])
     else:
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Открыть плеер", url=base_url)]
-        ])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Открыть плеер", url=url)]])
         
-    await update.message.reply_text(text, reply_markup=markup)
+    await update.message.reply_text("👇 Плеер:", reply_markup=markup)
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Останавливает воспроизведение радио."""
     await context.application.radio_manager.stop(update.effective_chat.id)
     await update.message.reply_text("🛑 Плеер остановлен.")
 
 async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пропускает текущий трек в радио."""
     await context.application.radio_manager.skip(update.effective_chat.id)
 
 async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ищет и отправляет трек по запросу. /play <название трека>"""
     query_text = " ".join(context.args)
     if not query_text:
-        await update.message.reply_text(
-            "ℹ️ Укажите название трека после команды.\n\n*Пример:*\n`/play Daft Punk - Get Lucky`",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await update.message.reply_text("Пример: `/play Numb`", parse_mode=ParseMode.MARKDOWN)
         return
 
     msg = await update.message.reply_text(f"🔎 Ищу: *{query_text}*...", parse_mode=ParseMode.MARKDOWN)
+    tracks = await context.application.downloader.search(query=query_text, search_mode='track', limit=1)
     
-    try:
-        tracks = await context.application.downloader.search(query=query_text, search_mode='track', limit=1)
-        
-        if tracks:
-            await msg.delete()
-            # Передаем ChatType, чтобы внутри _send_track тоже была проверка
-            chat_type = update.effective_chat.type
-            await _send_track(context, update.effective_chat.id, tracks[0].identifier, chat_type)
-        else:
-            await msg.edit_text("😕 Ничего не найдено.")
-    except Exception as e:
-        logger.error(f"Error in /play: {e}", exc_info=True)
-        await msg.edit_text("❌ Ошибка поиска.")
+    if tracks:
+        await msg.delete()
+        await _send_track(context, update.effective_chat.id, tracks[0].identifier, update.effective_chat.type)
+    else:
+        await msg.edit_text("😕 Ничего не найдено.")
 
 async def radio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /radio — запускает случайное радио."""
     await update.message.reply_text("🎲 Запускаю случайную волну...")
     asyncio.create_task(context.application.radio_manager.start(
         chat_id=update.effective_chat.id, 
@@ -112,150 +106,65 @@ async def radio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ))
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает неизвестные команды."""
-    await update.message.reply_text("🤔 Команда не распознана. Жми /start")
+    await update.message.reply_text("🤔 Команда не распознана.")
 
-# ==================== ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК ====================
+# ==================== CALLBACKS ====================
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Центральный обработчик для всех inline-кнопок."""
     query = update.callback_query
     await query.answer()
     data = query.data
 
-    logger.info(f"[CALLBACK] Received data: '{data}'")
-
     if data == "main_menu_start":
         await start(update, context)
-    
     elif data == "main_menu_genres":
-        markup = get_main_menu_keyboard()
-        await query.edit_message_text(
-            "🗂 *Каталог жанров:*",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=markup
-        )
-        
+        await query.edit_message_text("🗂 *Жанры:*", parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_menu_keyboard())
     elif data.startswith("cat|"):
-        path_str = data[4:] 
-        if not path_str:
-            await start(update, context)
-            return
-
-        path = path_str.split('|')
-        try:
-            current_level = MUSIC_CATALOG
-            for p in path:
-                current_level = current_level[p]
-        except KeyError:
-            await query.edit_message_text("❌ Ошибка меню", reply_markup=get_main_menu_keyboard())
-            return
-
-        await query.edit_message_text(
-            f"💿 *{path[-1]}:*",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_subcategory_keyboard(path_str)
-        )
-
+        path_str = data[4:]
+        if not path_str: await start(update, context); return
+        await query.edit_message_text(f"💿 *{path_str.split('|')[-1]}:*", parse_mode=ParseMode.MARKDOWN, reply_markup=get_subcategory_keyboard(path_str))
     elif data.startswith("play_cat|"):
-        path_str = data[9:]
-        if not path_str:
-            await query.edit_message_text("❗️Ошибка жанра", reply_markup=get_main_menu_keyboard())
-            return
-            
-        path = path_str.split('|')
+        path = data[9:].split('|')
         try:
-            current_level = MUSIC_CATALOG
-            for p in path[:-1]:
-                current_level = current_level[p]
-            search_query = current_level[path[-1]]
-        except (KeyError, TypeError):
-            search_query = " ".join(path) 
-
-        await query.edit_message_text(f"🎵 Запускаю: *{path[-1]}*...", parse_mode=ParseMode.MARKDOWN)
-        asyncio.create_task(context.application.radio_manager.start(
-            chat_id=query.message.chat.id, 
-            query=str(search_query),
-            chat_type=query.message.chat.type
-        ))
-
+            current = MUSIC_CATALOG
+            for p in path[:-1]: current = current[p]
+            q = current[path[-1]]
+        except: q = " ".join(path)
+        await query.edit_message_text(f"🎵 Играет: *{path[-1]}*...", parse_mode=ParseMode.MARKDOWN)
+        asyncio.create_task(context.application.radio_manager.start(query.message.chat.id, str(q), query.message.chat.type))
     elif data == "play_random":
-        await query.edit_message_text("🎲 Случайная волна...")
-        asyncio.create_task(context.application.radio_manager.start(
-            chat_id=query.message.chat.id, 
-            query="top 50 global hits",
-            chat_type=query.message.chat.type
-        ))
-
+        await query.edit_message_text("🎲 Рандом...")
+        asyncio.create_task(context.application.radio_manager.start(query.message.chat.id, "random", query.message.chat.type))
     elif data.startswith("sel_track|"):
-        video_id = data.split("|", 1)[1]
-        await query.edit_message_text("⏳ Загружаю трек...")
-        await _send_track(context, query.message.chat.id, video_id, query.message.chat.type)
+        await query.edit_message_text("⏳ Загрузка...")
+        await _send_track(context, query.message.chat.id, data.split("|")[1], query.message.chat.type)
         await start(update, context)
-
-    elif data == "noop":
-        pass
 
 # ==================== HELPERS ====================
 
 async def _send_track(context: ContextTypes.DEFAULT_TYPE, chat_id: int, video_id: str, chat_type: str):
-    """Загружает и отправляет трек пользователю."""
     dl = context.application.downloader
-    settings: Settings = context.application.settings
     res = await dl.download(video_id)
-    
     if not res.success:
-        await context.bot.send_message(chat_id, f"❌ Ошибка загрузки: {res.error_message}")
+        await context.bot.send_message(chat_id, "❌ Ошибка загрузки")
         return
-
-    markup = None
-    base_url = settings.BASE_URL.strip() if settings.BASE_URL else ""
     
-    # Кнопка плеера под треком (WebApp только в ЛС)
-    if chat_type != ChatType.CHANNEL and base_url.startswith("https"):
-        if chat_type == ChatType.PRIVATE:
-            markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎧 Открыть плеер", web_app=WebAppInfo(url=base_url))]
-            ])
-        else:
-             # В группах кнопку WebApp для конкретного трека лучше не давать или давать ссылку
-             pass
-
     try:
         if res.file_id:
-            await context.bot.send_audio(
-                chat_id, 
-                audio=res.file_id, 
-                title=res.track_info.title, 
-                performer=res.track_info.artist,
-                reply_markup=markup
-            )
+            await context.bot.send_audio(chat_id, audio=res.file_id, title=res.track_info.title, performer=res.track_info.artist)
         elif res.file_path:
             with open(res.file_path, 'rb') as f:
-                msg = await context.bot.send_audio(
-                    chat_id, 
-                    audio=f, 
-                    title=res.track_info.title, 
-                    performer=res.track_info.artist, 
-                    caption="#groove_ai",
-                    reply_markup=markup
-                )
-                if msg.audio:
-                    await dl.cache_file_id(video_id, msg.audio.file_id)
+                msg = await context.bot.send_audio(chat_id, f, title=res.track_info.title, performer=res.track_info.artist)
+                if msg.audio: await dl.cache_file_id(video_id, msg.audio.file_id)
     finally:
-        if res.file_path and await asyncio.to_thread(os.path.exists, res.file_path):
-            try:
-                await asyncio.to_thread(os.unlink, res.file_path)
-            except OSError as e:
-                logger.warning(f"Failed to delete temp file {res.file_path}: {e}")
+        # Убрано удаление файла, чтобы он остался доступен для WEB
+        # Очисткой занимается background task в main.py
+        pass
 
-# ==================== РЕГИСТРАЦИЯ ====================
-
-def setup_handlers(app: Application, radio: RadioManager, settings: Settings, downloader: YouTubeDownloader):
+def setup_handlers(app, radio, settings, downloader):
     app.downloader = downloader
     app.radio_manager = radio
     app.settings = settings
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("player", player_command))
     app.add_handler(CommandHandler("play", play_command))
@@ -264,4 +173,3 @@ def setup_handlers(app: Application, radio: RadioManager, settings: Settings, do
     app.add_handler(CommandHandler("skip", skip_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
-

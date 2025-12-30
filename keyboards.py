@@ -1,5 +1,5 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from config import MUSIC_CATALOG
+from catalog import MUSIC_CATALOG # NEW IMPORT
 
 def get_main_menu_keyboard():
     """Генерирует клавиатуру главного меню."""
