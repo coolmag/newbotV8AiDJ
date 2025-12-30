@@ -37,19 +37,16 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(3)
         self.search_semaphore = asyncio.Semaphore(5)
         
-        # 1. Достаем куки из переменной
+        # 1. Загрузка кук
         cookies_content = os.getenv("COOKIES_CONTENT")
         cookie_file_path = None
-        
         if cookies_content:
             cookie_file_path = "cookies.txt"
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
             logger.info("🍪 Куки успешно загружены из переменной в файл!")
-        else:
-            logger.warning("⚠️ Переменная COOKIES_CONTENT не найдена, пробуем без кук.")
 
-        # 2. Настраиваем yt-dlp с обходом блокировок (403 Forbidden Fix)
+        # 2. Настройка yt-dlp (Fix для 403 и Requested format)
         self.ydl_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -65,21 +62,19 @@ class YouTubeDownloader:
             'nocheckcertificate': True,
             'geo_bypass': True,
             
-            # === ГЛАВНОЕ ИСПРАВЛЕНИЕ ДЛЯ 403 ===
-            # Притворяемся мобильным приложением Android/iOS, у них меньше ограничений
+            # Принудительно IPv4 (критично для Railway)
+            'source_address': '0.0.0.0', 
+            
+            # Стабильный обход 403 через Android client
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'ios', 'web'],
-                    'player_skip': ['webpage', 'configs', 'js'],
+                    'player_client': ['android'],
                 }
             },
-            # Добавляем заголовки браузера
+            # Добавляем заголовки мобильного браузера
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
-            'socket_timeout': 15,
-            'retries': 5,
-            'fragment_retries': 5,
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            }
         }
         
         if cookie_file_path:
@@ -98,51 +93,28 @@ class YouTubeDownloader:
             artist_name = artist_list[0].get('name', '') if artist_list else ''
             if not bool(re.search('[а-яА-ЯёЁ]', title + artist_name)):
                 return False
-        if decade:
-            is_year_decade = len(decade) == 5 and decade.endswith('s') and decade[:4].isdigit()
-            if is_year_decade:
-                year_str = entry.get('year')
-                if year_str and year_str.isdigit() and int(year_str) < int(decade[:4]):
-                    return False
         return True
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
-            cache_key = f"yt_search_v9:{query.lower().strip()}:{search_mode}:{decade}"
+            cache_key = f"yt_search_v10:{query.lower().strip()}:{search_mode}:{decade}"
             cached_tracks = await self._cache.get(cache_key)
             if cached_tracks is not None:
-                logger.info(f"[Search] Cache HIT for query '{query}'")
                 return cached_tracks
 
-            logger.info(f"[Search] Cache MISS for query '{query}'")
             is_russian_query = any(word in query.lower() for word in ['советск', 'русск', 'ссср'])
-            
-            if search_mode == 'artist':
-                actual_query = f"{query} official songs"
-                yt_filter = "songs"
-            elif search_mode == 'track':
-                actual_query = f"{query} audio"
-                yt_filter = "songs"
-            else: # genre
-                actual_query = f"{query} topic"
-                yt_filter = "songs"
-            
-            logger.info(f"[Search] Performing search: query='{actual_query}', mode='{search_mode}'")
+            actual_query = f"{query} songs" if search_mode != 'track' else query
             
             loop = asyncio.get_running_loop()
-            def do_search(q: str, f: str) -> List[Dict]:
-                try: return self._ytmusic.search(q, filter=f, limit=limit)
-                except Exception as e:
-                    logger.error(f"YTMusic search failed for '{q}': {e}")
-                    return []
+            def do_search():
+                try: return self._ytmusic.search(actual_query, filter="songs", limit=limit)
+                except Exception: return []
 
-            search_results = await loop.run_in_executor(None, do_search, actual_query, yt_filter)
+            search_results = await loop.run_in_executor(None, do_search)
             valid_entries = [e for e in search_results if self._is_track_valid(e, decade, is_russian_query)]
-            
             final_tracks = [self._parse_ytmusic_entry(entry) for entry in valid_entries][:limit]
             
             await self._cache.set(cache_key, final_tracks, ttl=3600)
-            logger.info(f"[Search] Found {len(final_tracks)} filtered tracks for '{query}'")
             return final_tracks
 
     def _parse_ytmusic_entry(self, entry: Dict) -> TrackInfo:
@@ -154,10 +126,10 @@ class YouTubeDownloader:
         )
 
     async def get_track_info(self, video_id: str) -> Optional[TrackInfo]:
-        cache_key = f"track_info:{video_id}"
+        cache_key = f"track_info_v2:{video_id}"
         cached_info = await self._cache.get(cache_key)
         if cached_info: return cached_info
-        logger.info(f"[TrackInfo] Cache miss. Fetching info for {video_id}")
+        
         loop = asyncio.get_running_loop()
         def do_extract_info():
             try:
@@ -166,6 +138,7 @@ class YouTubeDownloader:
             except Exception as e:
                 logger.error(f"[TrackInfo] Failed for {video_id}: {e}")
                 return None
+                
         info = await loop.run_in_executor(None, do_extract_info)
         if not info: return None
         track_info = TrackInfo.from_yt_info(info)
@@ -176,14 +149,14 @@ class YouTubeDownloader:
         async with self.semaphore:
             track_info = await self.get_track_info(video_id)
             if not track_info:
-                return DownloadResult(success=False, error_message="Failed to get track info (403 or unavailable)")
+                return DownloadResult(success=False, error_message="Could not fetch track info")
             
             file_id_cache_key = f"file_id:{video_id}"
             cached_file_id = await self._cache.get(file_id_cache_key)
             if cached_file_id:
                 return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
             
-            logger.info(f"[Download] Starting download: {video_id}")
+            logger.info(f"[Download] Starting: {video_id}")
             loop = asyncio.get_running_loop()
             
             def do_download():
@@ -192,38 +165,4 @@ class YouTubeDownloader:
                         ydl.download([video_id])
                     return True
                 except Exception as e: 
-                    logger.error(f"Download exception for {video_id}: {e}")
-                    return False
-            
-            try:
-                success = await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=300.0)
-                if not success:
-                    return DownloadResult(success=False, error_message="Download failed (check logs for 403)", track_info=track_info)
-            except asyncio.TimeoutError:
-                self._cleanup_partial(video_id)
-                return DownloadResult(success=False, error_message="Timeout", track_info=track_info)
-
-            final_path = self._find_downloaded_file(video_id)
-            if not final_path:
-                return DownloadResult(success=False, error_message="File not found after download", track_info=track_info)
-            
-            return DownloadResult(success=True, file_path=final_path, track_info=track_info)
-
-    async def cache_file_id(self, video_id: str, file_id: str):
-        cache_key = f"file_id:{video_id}"
-        await self._cache.set(cache_key, file_id, ttl=0)
-        logger.info(f"Cached file_id for {video_id}")
-
-    def _find_downloaded_file(self, video_id: str) -> Optional[Path]:
-        pattern = str(self._settings.DOWNLOADS_DIR / f"{video_id}.mp3")
-        files = glob.glob(pattern)
-        if files:
-            path = Path(files[0])
-            if path.exists() and path.stat().st_size > 0: return path
-        return None
-
-    def _cleanup_partial(self, video_id: str):
-        pattern = str(self._settings.DOWNLOADS_DIR / f"{video_id}.*")
-        for f in glob.glob(pattern):
-            try: os.unlink(f)
-            except Exception: pass
+                    logger.error(f
