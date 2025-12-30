@@ -68,106 +68,82 @@ class YouTubeDownloader:
         logger.info("YouTubeDownloader initialized")
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
-        """
-        Проверка трека. 
-        strict=True: Жесткая проверка длительности и слов.
-        strict=False: Мягкая проверка (если ничего не найдено).
-        """
         if not entry or entry.get('resultType') not in ['song', 'video']: return False
         
         title = entry.get('title', '').lower()
-        
-        # Проверка на запрещенные слова
         if any(word in title for word in self.FORBIDDEN_WORDS): return False
         
-        # Длительность
         duration_sec = entry.get('duration_seconds', 0)
         
-        if strict:
-            # Строгий режим: 45с - 15мин
-            if not (45 < duration_sec < 900): return False
-        else:
-            # Мягкий режим: 30с - 20мин (допускаем миксы при безысходности)
-            if not (30 < duration_sec < 1200): return False
-
-        # Русские буквы для русских запросов
+        # Если не strict, принимаем практически всё
+        if not strict:
+            return duration_sec > 20 # Любой трек длиннее 20 секунд
+            
+        # Строгая проверка
+        if not (45 < duration_sec < 1200): return False
+        
         if is_russian_query:
             artist_list = entry.get('artists', [])
             artist_name = artist_list[0].get('name', '') if artist_list else ''
+            # На Railway часто приходят английские названия для русских треков,
+            # поэтому в строгом режиме мы ищем кириллицу, но в мягком - игнорируем это.
             if not bool(re.search('[а-яА-ЯёЁ]', title + artist_name)):
-                # Если в запросе были русские буквы, а в результате нет - подозрительно, но в мягком режиме пропускаем
-                if strict: return False
-
+                return False
         return True
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
-            # Кэширование
-            cache_key = f"yt_search_v10:{query.lower().strip()}:{search_mode}:{decade}"
-            cached_tracks = await self._cache.get(cache_key)
-            if cached_tracks is not None:
-                return cached_tracks
+            cache_key = f"yt_search_v11:{query.lower().strip()}:{search_mode}"
+            cached = await self._cache.get(cache_key)
+            if cached: return cached
 
-            is_russian_query = any(word in query.lower() for word in ['советск', 'русск', 'ссср', 'песни', 'рок', 'поп'])
+            # Стратегии поиска (если первая не сработала, пробуем следующую)
+            suffixes = ["", " music", " official", " audio", " remix"]
+            is_russian = any(word in query.lower() for word in ['советск', 'русск', 'ссср', 'песни'])
             
-            if search_mode == 'artist':
-                actual_query = f"{query} official songs"
-                yt_filter = "songs"
-            elif search_mode == 'track':
-                actual_query = f"{query} audio"
-                yt_filter = "songs"
-            else: 
-                # Для жанров добавляем 'topic' или 'mix' для лучших результатов
-                actual_query = f"{query} music"
-                yt_filter = "songs"  # Сначала ищем песни
+            all_valid_tracks = []
             
-            logger.info(f"[Search] Query='{actual_query}'")
-            
-            loop = asyncio.get_running_loop()
-            
-            # --- ПОПЫТКА 1: Строгий поиск песен ---
-            def do_search(q, f):
-                try: return self._ytmusic.search(q, filter=f, limit=limit + 10) # Берем с запасом
-                except Exception as e:
-                    logger.error(f"YTMusic error: {e}")
-                    return []
+            for suffix in suffixes:
+                actual_query = f"{query}{suffix}"
+                logger.info(f"[Search] Trying: '{actual_query}'")
+                
+                def do_search():
+                    try: return self._ytmusic.search(actual_query, filter="songs", limit=limit+5)
+                    except: return []
 
-            raw_results = await loop.run_in_executor(None, do_search, actual_query, yt_filter)
-            
-            # Фильтрация (Строгая)
-            valid_entries = [e for e in raw_results if self._is_track_valid(e, decade, is_russian_query, strict=True)]
-            
-            # --- ПОПЫТКА 2: Если пусто, ищем Видео (мягкая фильтрация) ---
-            if len(valid_entries) < 3:
-                logger.info(f"[Search] Мало результатов ({len(valid_entries)}), пробую искать видео...")
-                raw_results_video = await loop.run_in_executor(None, do_search, actual_query, "videos")
-                # Мягкая фильтрация
-                soft_entries = [e for e in raw_results_video if self._is_track_valid(e, decade, is_russian_query, strict=False)]
-                valid_entries.extend(soft_entries)
+                results = await asyncio.get_running_loop().run_in_executor(None, do_search)
+                
+                # Сначала пробуем строго
+                valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=True)]
+                
+                # Если мало, пробуем мягко
+                if len(valid) < 5:
+                    valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=False)]
+                
+                all_valid_tracks.extend([self._parse_ytmusic_entry(e) for e in valid])
+                
+                if len(all_valid_tracks) >= 5: break # Нашли достаточно
 
-            # --- ПОПЫТКА 3: Аварийная (убираем русские фильтры если были) ---
-            if not valid_entries and is_russian_query:
-                 logger.info(f"[Search] Ничего нет, снимаю языковой фильтр...")
-                 # Просто берем то, что дал ютуб, проверяя только стоп-слова
-                 valid_entries = [e for e in raw_results if self._is_track_valid(e, decade, False, strict=False)]
+            # Если всё еще пусто - аварийный поиск вообще без фильтров
+            if not all_valid_tracks:
+                logger.warning(f"[Search] Total failure for '{query}', disabling all filters.")
+                def emergency_search():
+                    try: return self._ytmusic.search(query, limit=10)
+                    except: return []
+                results = await asyncio.get_running_loop().run_in_executor(None, emergency_search)
+                all_valid_tracks = [self._parse_ytmusic_entry(e) for e in results if e.get('videoId')]
 
-            final_tracks = [self._parse_ytmusic_entry(entry) for entry in valid_entries]
-            
-            # Убираем дубликаты по ID
-            unique_tracks = []
-            seen_ids = set()
-            for t in final_tracks:
-                if t.identifier not in seen_ids:
-                    unique_tracks.append(t)
-                    seen_ids.add(t.identifier)
+            # Уникализация
+            unique = []
+            seen = set()
+            for t in all_valid_tracks:
+                if t.identifier not in seen:
+                    unique.append(t)
+                    seen.add(t.identifier)
 
-            result = unique_tracks[:limit]
-            
-            if result:
-                await self._cache.set(cache_key, result, ttl=3600)
-            
-            logger.info(f"[Search] Found {len(result)} tracks for '{query}'")
-            return result
+            final = unique[:limit]
+            if final: await self._cache.set(cache_key, final, ttl=3600)
+            return final
 
     def _parse_ytmusic_entry(self, entry: Dict) -> TrackInfo:
         artists = ", ".join([a['name'] for a in entry.get('artists', []) if a.get('name')])

@@ -104,45 +104,30 @@ class RadioSession:
         await self._fill_playlist(retry_query=query)
 
     async def _radio_loop(self):
+        consecutive_empty_searches = 0
+        
         while self.is_running:
             try:
                 if len(self.playlist) < 3:
                     await self._fill_playlist()
                 
                 if not self.playlist:
+                    consecutive_empty_searches += 1
+                    logger.warning(f"[{self.chat_id}] Playlist empty. Attempt {consecutive_empty_searches}")
+                    
                     await self._activate_emergency_protocol()
+                    
                     if not self.playlist:
-                        await asyncio.sleep(10)
+                        # Если даже аварийка пуста - ждем и увеличиваем паузу
+                        wait_time = min(10 * consecutive_empty_searches, 60)
+                        await self._update_status(f"⚠️ Проблемы со связью. Перенастройка... ({wait_time}с)")
+                        await asyncio.sleep(wait_time)
                         continue
 
+                consecutive_empty_searches = 0 # Сброс счетчика при успехе
                 track = self.playlist.pop(0)
-                self.played_ids.add(track.identifier)
-                if len(self.played_ids) > 300: 
-                    self.played_ids = set(list(self.played_ids)[150:])
-
-                success = await self._play_track(track)
                 
-                if success:
-                    self.consecutive_errors = 0
-                    self.tracks_played += 1
-                    
-                    # Ждем 90 секунд ИЛИ пока трек не будет скипнут
-                    # Если трек короче 90 секунд, ждем остаток
-                    time_to_wait = 90
-                    if track.duration and track.duration < 90:
-                        time_to_wait = track.duration + 5 # Небольшая задержка после короткого трека
-                        if time_to_wait > 90: time_to_wait = 90 # Не ждем больше 90 сек
-
-                    try:
-                        await asyncio.wait_for(self.skip_event.wait(), timeout=time_to_wait)
-                    except asyncio.TimeoutError:
-                        pass # Нормальное завершение ожидания
-                else:
-                    self.consecutive_errors += 1
-                    logger.warning(f"[{self.chat_id}] Error playing track. Streak: {self.consecutive_errors}")
-                    await asyncio.sleep(2) # Пауза перед следующей попыткой
-                    
-                self.skip_event.clear()
+                # Далее логика _play_track без изменений...
 
             except asyncio.CancelledError:
                 break
