@@ -189,7 +189,7 @@ async def get_audio_file(video_id: str, request: Request):
     return JSONResponse(status_code=404, content={"message": "Audio file not found"})
 
 @app.get("/api/health")
-def health():
+async def health():
     return {"status": "ok", "uptime": get_uptime()}
 
 @app.get("/api/player/playlist", response_model=dict)

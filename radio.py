@@ -81,8 +81,10 @@ class RadioSession:
 
     async def _delete_status(self):
         if self.status_message:
-            try: await self.status_message.delete())
-            except: pass
+            try: 
+                await self.status_message.delete()
+            except: 
+                pass
             self.status_message = None
 
     async def _fill_playlist(self, retry_query: str = None):
@@ -101,7 +103,7 @@ class RadioSession:
                 self.playlist.extend(new_tracks)
                 logger.info(f"[{self.chat_id}] Найдено треков: {len(new_tracks)}")
             else:
-                logger.warning(f"[{self.chat_id}] Поиск '{target_query}' не дал новых результатов.")
+                logger.warning(f"[{self.chat_id}] Поиск '{target_query}' не дал результатов.")
         except Exception as e:
             logger.error(f"Search error: {e}")
         finally:
@@ -112,11 +114,9 @@ class RadioSession:
         
         while self.is_running:
             try:
-                # 1. Пополнение плейлиста
                 if len(self.playlist) < 3:
                     await self._fill_playlist()
                 
-                # 2. Если пусто — аварийный режим
                 if not self.playlist:
                     await self._update_status("⚠️ Сигнал слаб. Ищу резервную волну...")
                     fallbacks = ["top 50 hits", "lofi radio", "80s music"]
@@ -126,29 +126,23 @@ class RadioSession:
                         await asyncio.sleep(10) # Даем API отдохнуть
                         continue
 
-                # 3. Берем следующий трек
                 track = self.playlist.pop(0)
                 self.played_ids.add(track.identifier)
                 if len(self.played_ids) > 200: 
                     self.played_ids = set(list(self.played_ids)[100:])
 
-                # 4. Пробуем воспроизвести
                 success = await self._play_track(track)
                 
                 if success:
                     consecutive_errors = 0
-                    # Ждем окончания трека или команду Skip
-                    # Ждем максимум 4 минуты (защита от зависания)
                     wait_time = min(track.duration, 240) if track.duration > 0 else 180
                     try:
                         await asyncio.wait_for(self.skip_event.wait(), timeout=wait_time)
-                        logger.info(f"[{self.chat_id}] Трек пропущен (Skip)")
                     except asyncio.TimeoutError:
-                        pass # Трек доиграл сам
+                        pass 
                 else:
                     consecutive_errors += 1
                     wait_backoff = min(5 * consecutive_errors, 30)
-                    logger.warning(f"[{self.chat_id}] Ошибка трека. Пауза {wait_backoff}с...")
                     await asyncio.sleep(wait_backoff)
                     
                 self.skip_event.clear()
@@ -156,7 +150,7 @@ class RadioSession:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Critical loop error: {e}", exc_info=True)
+                logger.error(f"Critical loop error: {e}")
                 await asyncio.sleep(10)
 
         self.is_running = False
@@ -165,11 +159,9 @@ class RadioSession:
         result = None
         try:
             await self._update_status(f"⬇️ Загрузка: *{track.title}*...")
-            
             result = await self.downloader.download(track.identifier)
             
             if not result or not result.success: 
-                logger.error(f"Download failed for {track.identifier}: {result.error_message if result else 'No result'}")
                 return False
             
             caption = get_now_playing_message(track, self.display_name)
@@ -182,7 +174,6 @@ class RadioSession:
                 else:
                     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Открыть плеер", url=base_url)]])
 
-            # Отправка аудио
             if result.file_id:
                 await self.bot.send_audio(self.chat_id, audio=result.file_id, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
             elif result.file_path:
@@ -190,7 +181,6 @@ class RadioSession:
                     msg = await self.bot.send_audio(self.chat_id, audio=f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
                     if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
             
-            # Убираем статус "Загрузка" после успешной отправки
             await self._delete_status()
             return True
 
