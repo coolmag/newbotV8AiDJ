@@ -1,9 +1,10 @@
-const CACHE_NAME = 'aurora-player-v8.7';
+const CACHE_NAME = 'aurora-player-v28';
 const ASSETS = [
     './', './index.html', './style.css',
     './js/main.js', './js/api.js', './js/player.js',
-    './js/store.js', './js/ui.js', './js/genres.js', 
-    './js/visualizer.js', './js/haptics.js', './js/ai.js'
+    './js/store.js', './js/ui.js', './js/genres.js', './js/visualizer.js',
+    './js/haptics.js', './js/ai.js',
+    './favicon.svg'
 ];
 
 self.addEventListener('install', e => {
