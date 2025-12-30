@@ -27,52 +27,19 @@ logger = logging.getLogger("handlers")
 # ==================== КОМАНДЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает команду /start, отображая главное меню и кнопку плеера."""
-    if not hasattr(context.application, 'settings'):
-        logger.error("❌ Settings not found in application context")
-        await update.message.reply_text("Ошибка конфигурации бота.")
-        return
-
-    settings: Settings = context.application.settings
-    # Очищаем URL от пробелов, если они есть
-    base_url = settings.BASE_URL.strip() if settings.BASE_URL else ""
-    
-    text = (
-        "🎧 *Музыкальный комбайн*\n\n"
-        "Нажмите кнопку ниже, чтобы запустить веб-плеер или открыть меню жанров.\n\n"
-        "Команды:\n"
-        "/play `<название>` - поиск трека\n"
-        "/radio - случайная волна"
-    )
+    settings = context.application.settings
+    text = "🎧 *Музыкальный комбайн*\n\nЗапустите плеер или выберите жанр:"
     
     keyboard = []
+    # Кнопка WebApp (только для личных сообщений)
+    if update.effective_chat.type == ChatType.PRIVATE:
+        keyboard.append([InlineKeyboardButton("🎧 Открыть плеер", web_app=WebAppInfo(url=settings.BASE_URL))])
+    else:
+        keyboard.append([InlineKeyboardButton("🎧 Открыть плеер (браузер)", url=settings.BASE_URL)])
     
-    # Логика добавления кнопки плеера
-    if base_url and base_url.startswith("https"):
-        # WebApp кнопка работает ТОЛЬКО в личных чатах
-        if update.effective_chat.type == ChatType.PRIVATE:
-            keyboard.append([InlineKeyboardButton("🎧 Открыть плеер", web_app=WebAppInfo(url=base_url))])
-        else:
-            # В группах даем обычную ссылку, чтобы не было ошибки Button_type_invalid
-            keyboard.append([InlineKeyboardButton("🎧 Открыть плеер (в браузере)", url=base_url)])
+    keyboard.append([InlineKeyboardButton("🗂 Меню жанров", callback_data="main_menu_genres")])
     
-    # Кнопка меню жанров (работает везде)
-    keyboard.append([InlineKeyboardButton("🗂 Открыть меню жанров", callback_data="main_menu_genres")])
-    
-    markup = InlineKeyboardMarkup(keyboard)
-
-    try:
-        if update.callback_query:
-            await update.callback_query.answer()
-            await update.callback_query.edit_message_text(
-                text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup
-            )
-        elif update.message:
-            await update.message.reply_text(
-                text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup
-            )
-    except Exception as e:
-        logger.error(f"Error in /start: {e}", exc_info=True)
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
 async def player_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет кнопку для запуска веб-плеера."""
