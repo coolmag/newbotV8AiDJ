@@ -9,9 +9,16 @@ from telegram import Bot, Message, InlineKeyboardMarkup, InlineKeyboardButton, W
 from telegram.constants import ParseMode, ChatType
 from telegram.error import BadRequest, RetryAfter
 
-from config import Settings, MUSIC_CATALOG
+from config import Settings
 from models import TrackInfo, DownloadResult
 from youtube import YouTubeDownloader
+
+import json
+from pathlib import Path
+
+# Load MUSIC_CATALOG from genres.json
+with open(Path(__file__).parent / "genres.json", "r", encoding="utf-8") as f:
+    MUSIC_CATALOG = json.load(f)
 
 logger = logging.getLogger("radio")
 
