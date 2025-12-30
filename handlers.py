@@ -14,7 +14,7 @@ from telegram.ext import (
 
 from radio import RadioManager
 from config import Settings
-from catalog import MUSIC_CATALOG # NEW IMPORT
+from catalog import MUSIC_CATALOG # Импорт из нового файла
 from youtube import YouTubeDownloader
 from keyboards import (
     get_track_search_keyboard, 
@@ -41,7 +41,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = []
     
-    # --- БЕЗОПАСНАЯ КНОПКА ЗАПУСКА ---
+    # --- БЕЗОПАСНАЯ КНОПКА ЗАПУСКА ВЕБ-ПЛЕЕРА ---
     if base_url.startswith("http"):
         if update.effective_chat.type == ChatType.PRIVATE:
             # В личке открываем WebApp (красиво)
@@ -157,8 +157,7 @@ async def _send_track(context: ContextTypes.DEFAULT_TYPE, chat_id: int, video_id
                 msg = await context.bot.send_audio(chat_id, f, title=res.track_info.title, performer=res.track_info.artist)
                 if msg.audio: await dl.cache_file_id(video_id, msg.audio.file_id)
     finally:
-        # Убрано удаление файла, чтобы он остался доступен для WEB
-        # Очисткой занимается background task в main.py
+        # Убрали os.unlink, теперь файл остается для Web Player
         pass
 
 def setup_handlers(app, radio, settings, downloader):

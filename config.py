@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     GENRE_SEARCH_MAX_DURATION_S: int = 600 
     ADMIN_ID_LIST: List[int] = []
     
-    # Настройки очистки (новые)
+    # Настройки очистки (новые, чтобы не забить диск)
     CLEANUP_INTERVAL_SECONDS: int = 3600  # Раз в час
     FILE_MAX_AGE_SECONDS: int = 86400     # 24 часа
 

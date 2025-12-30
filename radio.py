@@ -8,7 +8,7 @@ from telegram import Bot, Message, WebAppInfo, InlineKeyboardMarkup, InlineKeybo
 from telegram.constants import ParseMode, ChatType
 from telegram.error import BadRequest
 
-# Changed import
+# Используем новый каталог
 from config import Settings
 from catalog import MUSIC_CATALOG 
 
@@ -111,10 +111,11 @@ class RadioSession:
             
             caption = f"🎧 *{track.title}*\n👤 {track.artist}\n📻 _{self.display_name}_"
             
-            # --- БЕЗОПАСНАЯ КНОПКА (ОПЯТЬ) ---
+            # --- КНОПКА ВЕБ ПЛЕЕРА ---
             markup = None
             if self.chat_type == ChatType.PRIVATE and self.settings.BASE_URL:
                  markup = InlineKeyboardMarkup([[InlineKeyboardButton("🎧 Плеер", web_app=WebAppInfo(url=self.settings.BASE_URL))]])
+            # -------------------------
 
             if res.file_id:
                 await self.bot.send_audio(self.chat_id, res.file_id, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
@@ -123,7 +124,8 @@ class RadioSession:
                     msg = await self.bot.send_audio(self.chat_id, f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
                     if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
             
-            # REMOVED: os.unlink(res.file_path) to prevent WebApp 404
+            # ВАЖНО: Мы НЕ удаляем файл здесь (os.unlink убран),
+            # чтобы он был доступен для стриминга в WebApp
             
             return True
         except Exception as e:

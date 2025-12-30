@@ -68,7 +68,7 @@ MUSIC_CATALOG = {
             "Modern Blues": "modern blues rock"
         },
         "Soul & Funk": {
-            "Classic Soul": "classic soul marvin gaye otis reddin",
+            "Classic Soul": "classic soul marvin Gaye otis reddin",
             "Funk": "70s funk classics"
         }
     },

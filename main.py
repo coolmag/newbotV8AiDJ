@@ -29,7 +29,10 @@ def get_uptime():
     return str(timedelta(seconds=int(time.time() - _start_time)))
 
 async def cleanup_task(settings: Settings):
-    """Фоновая задача для очистки старых файлов."""
+    """
+    Фоновая задача: удаляет файлы старше FILE_MAX_AGE_SECONDS,
+    чтобы сервер не переполнился.
+    """
     while True:
         try:
             await asyncio.sleep(settings.CLEANUP_INTERVAL_SECONDS)
@@ -41,7 +44,7 @@ async def cleanup_task(settings: Settings):
             if settings.DOWNLOADS_DIR.exists():
                 for f in settings.DOWNLOADS_DIR.iterdir():
                     if f.is_file():
-                        # Проверяем время последней модификации
+                        # Проверяем возраст файла
                         if now - f.stat().st_mtime > settings.FILE_MAX_AGE_SECONDS:
                             try:
                                 f.unlink()
@@ -55,7 +58,7 @@ async def cleanup_task(settings: Settings):
             break
         except Exception as e:
             logger.error(f"Error in cleanup task: {e}")
-            await asyncio.sleep(60) # Ждем минуту перед повторной попыткой при ошибке
+            await asyncio.sleep(60)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -73,7 +76,7 @@ async def lifespan(app: FastAPI):
     tg_app = builder.build()
     
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
-    app.state.radio_manager = radio_manager # Сохраняем для доступа через API если нужно
+    app.state.radio_manager = radio_manager 
     
     setup_handlers(app=tg_app, radio=radio_manager, settings=settings, downloader=downloader)
     
@@ -83,12 +86,12 @@ async def lifespan(app: FastAPI):
     
     app.state.tg_app = tg_app
     
-    # Запуск задачи очистки
+    # Запуск фоновой очистки
     cleanup_future = asyncio.create_task(cleanup_task(settings))
     
     yield
     
-    # Shutdown
+    # Завершение
     cleanup_future.cancel()
     await radio_manager.stop_all()
     await tg_app.stop()
@@ -109,16 +112,21 @@ app.add_middleware(
 
 @app.get("/audio/{video_id}")
 async def stream_audio(video_id: str, request: Request):
+    """Стриминг аудио для Веб-плеера"""
     downloader: YouTubeDownloader = request.app.state.downloader
-    # Проверяем, есть ли файл, если нет — качаем
+    
+    # 1. Сначала пробуем скачать (если нет в кэше)
     res = await downloader.download(video_id)
+    
+    # 2. Если файл есть на диске -> отдаем
     if res.success and res.file_path and res.file_path.exists():
-        # Обновляем время доступа к файлу, чтобы cleanup не удалил его
+        # "Трогаем" файл, чтобы обновить время модификации (защита от cleanup)
         try:
             os.utime(res.file_path, None)
         except: pass
         return FileResponse(res.file_path, media_type="audio/mpeg")
-    raise HTTPException(status_code=404, detail="Audio not found")
+        
+    raise HTTPException(status_code=404, detail="Audio not found or failed to download")
 
 @app.get("/api/health")
 async def health():

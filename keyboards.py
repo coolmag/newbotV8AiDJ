@@ -1,5 +1,5 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from catalog import MUSIC_CATALOG # NEW IMPORT
+from catalog import MUSIC_CATALOG # Импорт из нового файла
 
 def get_main_menu_keyboard():
     """Генерирует клавиатуру главного меню."""
@@ -20,7 +20,6 @@ def get_subcategory_keyboard(path_str: str):
         for p in path:
             current_level = current_level[p]
     except KeyError:
-        # Если путь невалидный, возвращаем пустую клавиатуру или клавиатуру ошибки
         return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Ошибка меню", callback_data="main_menu")]])
 
     keyboard = []
@@ -30,7 +29,6 @@ def get_subcategory_keyboard(path_str: str):
         
         # Если это папка (dict)
         if isinstance(val, dict):
-            # Используем сокращение 'c|' вместо 'cat|' для экономии места
             cb = f"cat|{full_path}"
             if len(cb.encode()) <= 64:
                 keyboard.append([InlineKeyboardButton(f"📂 {name}", callback_data=cb)])
