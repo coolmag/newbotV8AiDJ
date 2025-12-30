@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aurora-player-v8.5';
+const CACHE_NAME = 'aurora-player-v8.7';
 const ASSETS = [
     './', './index.html', './style.css',
     './js/main.js', './js/api.js', './js/player.js',
