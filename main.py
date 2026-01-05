@@ -8,12 +8,13 @@ import os
 import json
 import re
 
-# Условный импорт Google
+# Настройка AI (Google Generative AI)
+# Используем try-except для мягкой обработки отсутствия библиотеки
+HAS_AI_LIB = False
 try:
-    import google.genai as genai
+    import google.generativeai as genai
     HAS_AI_LIB = True
 except ImportError:
-    HAS_AI_LIB = False
     print("⚠️ Google GenAI lib not found. AI features disabled.")
 
 from fastapi import FastAPI, Request
@@ -31,13 +32,16 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from models import TrackInfo
 
-# Настройка AI
+# Инициализация Gemini
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_KEY and HAS_AI_LIB:
     try:
         genai.configure(api_key=GEMINI_KEY)
+        logger = logging.getLogger(__name__)
+        logger.info("🧠 Gemini AI connected successfully.")
     except Exception as e:
         print(f"⚠️ Gemini Config Error: {e}")
+        HAS_AI_LIB = False
 
 logger = logging.getLogger(__name__)
 _start_time = time.time()
@@ -82,14 +86,6 @@ async def lifespan(app: FastAPI):
     )
     
     await tg_app.initialize()
-    await tg_app.bot.set_my_commands([
-        ("start", "🗂 Открыть меню жанров"),
-        ("player", "🎧 Открыть веб-плеер"),
-        ("play", "🔎 Поиск трека"),
-        ("radio", "🎲 Случайное радио"),
-        ("stop", "⏹️ Остановить"),
-        ("skip", "⏭️ Пропустить трек")
-    ])
     await tg_app.start()
     
     webhook_url = settings.WEBHOOK_URL
@@ -109,7 +105,6 @@ async def lifespan(app: FastAPI):
     await cache.close()
     logger.info("✅ Shutdown complete.")
 
-# 🔥 Инициализация app ПЕРЕД роутами
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
@@ -120,43 +115,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- AI DJ ROUTE ---
 @app.get("/api/ai/dj")
-async def ai_dj_generate(prompt: str):
-    if not GEMINI_KEY or not HAS_AI_LIB:
-        return {"error": "AI Brain not connected"}
+async def ai_dj_generate(prompt: str, request: Request):
+    """
+    Генерирует плейлист и интро с помощью Gemini.
+    """
+    if not HAS_AI_LIB or not GEMINI_KEY:
+        # Если AI сломан, возвращаем обычный поиск (Fallback)
+        downloader: YouTubeDownloader = request.app.state.downloader
+        tracks = await downloader.search(query=prompt + " music", limit=10)
+        return {
+            "dj_intro": "Модуль ИИ недоступен. Запускаю стандартный поиск.",
+            "playlist": tracks
+        }
 
-    print(f"[AI] Получен запрос: {prompt}")
+    logger.info(f"[AI] Generating playlist for: {prompt}")
 
     system_instruction = """
-    Ты — DJ Aurora. Твоя задача:
-    1. Подобрать 5 идеальных треков под запрос.
-    2. Написать короткое интро (1 фраза).
-    Верни ответ ТОЛЬКО в формате JSON:
-    {"intro": "...", "tracks": ["Artist - Title"]}
+    Ты — DJ Aurora, искусственный интеллект музыкальной станции.
+    Твоя задача:
+    1. Проанализировать запрос пользователя (настроение, жанр, активность).
+    2. Подобрать 5-8 конкретных треков (Artist - Title), которые идеально подходят.
+    3. Придумать очень короткую, харизматичную фразу (Intro) на русском языке для представления этого микса (как ведущий радио).
+    
+    Формат ответа СТРОГО JSON:
+    {
+        "intro": "Текст интро здесь...",
+        "tracks": ["Artist - Title", "Artist - Title", ...]
+    }
     """
 
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(f"{system_instruction}\n\nЗапрос: {prompt}")
+        response = model.generate_content(f"{system_instruction}\n\nЗапрос слушателя: {prompt}")
+        
+        # Чистим ответ от markdown ```json ... ```
         clean_text = re.sub(r"```json|```", "", response.text).strip()
         data = json.loads(clean_text)
         
-        playlist = []
-        for track_name in data.get("tracks", []):
-            playlist.append({
-                "title": track_name,
-                "artist": "AI Selection",
-                "query": track_name
-            })
+        tracks_query = data.get("tracks", [])
+        intro = data.get("intro", "Система Аврора выполняет ваш запрос.")
+        
+        # Теперь ищем эти треки через YouTubeDownloader
+        downloader: YouTubeDownloader = request.app.state.downloader
+        final_playlist = []
+        
+        for track_name in tracks_query:
+            # Ищем каждый трек (limit=1 для точности)
+            found = await downloader.search(query=track_name, limit=1)
+            if found:
+                final_playlist.extend(found)
+        
+        # Если AI придумал треки, но мы их не нашли, делаем обычный поиск по жанру
+        if not final_playlist:
+             final_playlist = await downloader.search(query=prompt, limit=10)
 
         return {
-            "dj_intro": data.get("intro", "Система готова."),
-            "playlist": playlist
+            "dj_intro": intro,
+            "playlist": final_playlist
         }
 
     except Exception as e:
-        print(f"[AI Error] {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error(f"[AI Error] {e}")
+        # Fallback при ошибке API
+        downloader: YouTubeDownloader = request.app.state.downloader
+        tracks = await downloader.search(query=prompt, limit=10)
+        return {
+            "dj_intro": "Ошибка нейросети. Включаю аварийный протокол.",
+            "playlist": tracks
+        }
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
@@ -166,7 +194,7 @@ async def get_audio_file(video_id: str, request: Request):
     if file_path and file_path.exists():
         return FileResponse(file_path, media_type="audio/mpeg", filename=f"{video_id}.mp3")
     
-    logger.info(f"Audio file not found for {video_id}, attempting to download and wait...")
+    logger.info(f"Audio file not found for {video_id}, attempting to download...")
     await downloader.download(video_id)
     final_path = await downloader.wait_for_download_completion(video_id)
     
@@ -182,13 +210,9 @@ async def health():
 @app.get("/api/player/playlist", response_model=dict)
 async def get_playlist(query: str, request: Request):
     downloader: YouTubeDownloader = request.app.state.downloader
-    logger.info(f"API: Поиск плейлиста по запросу: '{query}'")
-    try:
-        tracks: List[TrackInfo] = await downloader.search(query=query, search_mode='track', limit=15)
-        return {"playlist": tracks}
-    except Exception as e:
-        logger.error(f"API: Ошибка при поиске плейлиста: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"message": "Internal server error"})
+    logger.info(f"API: Playlist search: '{query}'")
+    tracks = await downloader.search(query=query, search_mode='track', limit=15)
+    return {"playlist": tracks}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -198,7 +222,7 @@ async def telegram_webhook(request: Request):
         update = Update.de_json(data, tg_app.bot)
         await tg_app.process_update(update)
     except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True)
+        logger.error(f"Webhook error: {e}")
     return {"ok": True}
 
 app.mount("/", StaticFiles(directory="webapp", html=True), name="static")
