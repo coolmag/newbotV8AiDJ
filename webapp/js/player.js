@@ -28,32 +28,33 @@ function updateReelsState(playing) {
 }
 
 function setupAudioListeners() {
-    audio.addEventListener('loadstart', () => reportStatus('loading', 'LOADING TAPE...'));
+    audio.addEventListener('loadstart', () => reportStatus('loading', 'LOADING...'));
     audio.addEventListener('waiting', () => reportStatus('loading', 'BUFFERING...'));
+    
     audio.addEventListener('canplay', () => {
         reportStatus('ready', 'TAPE READY');
         if (store.isPlaying) safePlay();
     });
+    
     audio.addEventListener('play', () => {
         store.isPlaying = true;
         updateReelsState(true);
         reportStatus('playing', 'PLAYING');
-        document.documentElement.style.setProperty('--reactor-color', '#00f2ff'); // Cyan
         updateMediaSession();
     });
+    
     audio.addEventListener('pause', () => {
-        store.isPlaying = false;
+        // Не сбрасываем isPlaying сразу, если это просто буферизация
         updateReelsState(false);
         reportStatus('paused', 'STOPPED');
-        document.documentElement.style.setProperty('--reactor-color', '#ff0055'); // Red
     });
+    
     audio.addEventListener('error', (e) => {
-        console.error("Audio Error:", e);
+        console.warn("Audio Error, skipping...");
         updateReelsState(false);
-        reportStatus('error', 'TAPE ERROR');
-        document.documentElement.style.setProperty('--reactor-color', '#ff0000');
-        setTimeout(() => nextTrack(), 2000);
+        setTimeout(() => nextTrack(), 1000);
     });
+    
     audio.addEventListener('ended', () => {
         updateReelsState(false);
         nextTrack();
@@ -66,10 +67,12 @@ async function safePlay() {
         updateMediaSession();
         updateReelsState(true);
     } catch (e) {
-        console.warn("Autoplay blocked:", e);
-        store.isPlaying = false;
-        updateReelsState(false);
-        reportStatus('paused', 'PRESS PLAY');
+        // Игнорируем ошибку прерывания, это нормально при быстром переключении
+        if (e.name !== 'AbortError') {
+            console.warn("Play error:", e);
+            store.isPlaying = false;
+            updateReelsState(false);
+        }
     }
 }
 
@@ -78,15 +81,11 @@ function updateMediaSession() {
     const track = store.playlist[store.currentTrackIndex];
     if (!track) return;
     
-    const artwork = track.thumbnail_url 
-        ? [{ src: track.thumbnail_url, sizes: '512x512', type: 'image/jpeg' }]
-        : [{ src: 'https://cdn-icons-png.flaticon.com/512/4430/4430494.png', sizes: '512x512', type: 'image/png' }];
-
     navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: track.artist,
-        album: 'Aurora Deck',
-        artwork: artwork
+        album: 'Aurora AI Deck',
+        artwork: [{ src: 'favicon.svg', sizes: '512x512', type: 'image/svg+xml' }]
     });
 
     const handlers = [
@@ -94,7 +93,6 @@ function updateMediaSession() {
         ['pause', () => { store.isPlaying = false; audio.pause(); }],
         ['previoustrack', () => prevTrack()],
         ['nexttrack', () => nextTrack()],
-        ['seekto', (details) => { audio.currentTime = details.seekTime; }],
     ];
     for (const [action, handler] of handlers) {
         try { navigator.mediaSession.setActionHandler(action, handler); } catch (e) {}
@@ -109,8 +107,10 @@ async function playTrack(index) {
     store.currentTrackIndex = index;
     const track = store.playlist[index];
     store.isPlaying = true;
-    reportStatus('loading', `LOADING: ${track.title.toUpperCase().substring(0, 20)}`);
-    document.documentElement.style.setProperty('--reactor-color', '#ffe600'); // Yellow loading
+    
+    // Эффект вставки кассеты
+    reportStatus('loading', `LOADING: ${track.title.substring(0,15)}...`);
+    
     audio.src = `/audio/${track.identifier}.mp3`;
     updateMediaSession();
     audio.load();
@@ -121,7 +121,10 @@ function togglePlay() {
     if (audio.paused) {
         if (store.currentTrackIndex === -1 && store.playlist.length > 0) playTrack(0);
         else safePlay();
-    } else { audio.pause(); }
+    } else { 
+        store.isPlaying = false;
+        audio.pause(); 
+    }
 }
 
 function nextTrack() {
@@ -144,7 +147,6 @@ function seek(pct) {
 function toggleBassBoost() {
     isBassBoosted = !isBassBoosted;
     Visualizer.setBassBoost(isBassBoosted);
-    reportStatus('info', `BASS BOOST: ${isBassBoosted ? 'ON' : 'OFF'}`);
     return isBassBoosted;
 }
 
