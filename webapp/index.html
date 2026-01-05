@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Aurora Hi-Fi</title>
+    <title>Aurora GX-4000D</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- ИСПРАВЛЕНА ССЫЛКА НА ШРИФТЫ (убраны пробелы) -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Orbitron:wght@500;700;800&display=swap" rel="stylesheet">
+    <!-- ИСПРАВЛЕННАЯ ССЫЛКА БЕЗ ПРОБЕЛОВ -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=33">
+    <link rel="stylesheet" href="style.css?v=34">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -17,7 +17,13 @@
     <canvas id="visualizer-canvas"></canvas>
     
     <div id="app-container">
+        <!-- КОРПУС МАГНИТОФОНА -->
         <div class="tape-deck">
+            <!-- Боковые панели (Дерево) -->
+            <div class="side-panel left"></div>
+            <div class="side-panel right"></div>
+            
+            <!-- Лицевая панель (Алюминий) -->
             <div class="faceplate">
                 <!-- Винты -->
                 <div class="screw screw-tl"></div>
@@ -25,108 +31,153 @@
                 <div class="screw screw-bl"></div>
                 <div class="screw screw-br"></div>
 
-                <!-- Шапка -->
-                <div class="deck-header">
-                    <button class="metal-btn" id="btn-open-genres"><span class="material-icons-round">grid_view</span></button>
-                    <div class="brand-badge">
-                        <div class="brand-name">AURORA</div>
-                        <div class="brand-model">GX-4000D AI DECK</div>
+                <!-- Верхний блок -->
+                <div class="header-section">
+                    <button class="metal-round-btn" id="btn-open-genres" title="Library">
+                        <span class="material-icons-round">grid_view</span>
+                    </button>
+                    <div class="brand-plate">
+                        <div class="brand-logo">AURORA</div>
+                        <div class="brand-model">STEREO TAPE DECK <span style="color:#cc0000">GX-4000D</span></div>
                     </div>
-                    <button class="metal-btn" id="btn-open-playlist"><span class="material-icons-round">queue_music</span></button>
+                    <button class="metal-round-btn" id="btn-open-playlist" title="Queue">
+                        <span class="material-icons-round">queue_music</span>
+                    </button>
                 </div>
 
-                <!-- Кассета -->
-                <div class="cassette-window">
-                    <div class="window-glass"></div>
-                    <div class="reels-area">
-                        <div class="reel left" id="reel-left">
-                            <div class="reel-spokes"></div>
-                            <div class="reel-tape full"></div>
+                <!-- Кассетный отсек -->
+                <div class="cassette-housing">
+                    <div class="glass-reflection"></div>
+                    
+                    <div class="reels-mechanism">
+                        <div class="reel-hub left" id="reel-left">
+                            <div class="spool-teeth"></div>
+                            <div class="tape-roll full"></div>
+                            <div class="clamp"></div>
                         </div>
                         
-                        <div class="tape-label-strip">
-                            <span id="track-artist" class="tape-artist">NO TAPE</span>
-                            <div id="track-title-scrolling" class="scrolling-text">INSERT CASSETTE</div>
+                        <div class="tape-window-center">
+                            <div class="tape-label">
+                                <span id="track-artist">NO TAPE LOADED</span>
+                            </div>
+                            <div class="lcd-text-container">
+                                <div id="track-title-scrolling" class="scrolling-text">INSERT CASSETTE</div>
+                            </div>
                         </div>
 
-                        <div class="reel right" id="reel-right">
-                            <div class="reel-spokes"></div>
-                            <div class="reel-tape empty inside"></div>
+                        <div class="reel-hub right" id="reel-right">
+                            <div class="spool-teeth"></div>
+                            <div class="tape-roll empty inside"></div>
+                            <div class="clamp"></div>
                         </div>
                     </div>
-                    <!-- Перемотка -->
-                    <div class="seek-container" id="seek-bar">
-                        <div class="seek-fill" id="seek-fill"></div>
+
+                    <!-- Сенсорная полоса перемотки -->
+                    <div class="touch-strip" id="seek-bar">
+                        <div class="touch-progress" id="seek-fill"></div>
                     </div>
                 </div>
 
-                <!-- Приборы и Кнопки -->
-                <div class="mid-section">
-                    <div class="vu-meters">
-                        <div class="vu-channel">
-                            <div class="vu-scale"></div>
-                            <div class="vu-needle" id="needle-l"></div>
+                <!-- Счетчик ленты -->
+                <div class="counter-box">
+                    <span class="counter-label">TAPE COUNTER</span>
+                    <span class="counter-digits" id="time-current">0000</span>
+                </div>
+
+                <!-- Секция управления -->
+                <div class="control-deck">
+                    <!-- VU Meters -->
+                    <div class="vu-meters-frame">
+                        <div class="vu-glass"></div>
+                        <div class="vu-meter left">
+                            <div class="vu-scale-bg"></div>
+                            <div class="needle" id="needle-l"></div>
                         </div>
-                        <div class="vu-channel">
-                            <div class="vu-scale"></div>
-                            <div class="vu-needle" id="needle-r"></div>
+                        <div class="vu-meter right">
+                            <div class="vu-scale-bg"></div>
+                            <div class="needle" id="needle-r"></div>
                         </div>
+                        <div class="vu-backlight"></div>
                     </div>
 
-                    <div class="transport">
-                        <button class="key" id="btn-prev"><span class="material-icons-round">fast_rewind</span></button>
-                        <button class="key play" id="btn-play-pause">
-                            <div class="led"></div>
+                    <!-- Кнопки транспорта -->
+                    <div class="transport-keys">
+                        <button class="piano-key" id="btn-prev"><span class="material-icons-round">fast_rewind</span></button>
+                        <button class="piano-key play" id="btn-play-pause">
+                            <div class="rec-led"></div>
                             <span class="material-icons-round">play_arrow</span>
                         </button>
-                        <button class="key" id="btn-next"><span class="material-icons-round">fast_forward</span></button>
+                        <button class="piano-key" id="btn-next"><span class="material-icons-round">fast_forward</span></button>
                     </div>
                 </div>
 
-                <!-- Низ -->
-                <div class="bottom-section">
-                    <div class="fader-area">
-                        <span class="material-icons-round" id="icon-vol-mute" style="color:#666; font-size:16px;">volume_mute</span>
-                        <div class="fader-slot" id="vol-bg">
-                            <div class="fader-knob" id="vol-knob"></div>
+                <!-- Нижняя панель (Микшер) -->
+                <div class="mixer-section">
+                    <!-- Громкость -->
+                    <div class="fader-container">
+                        <span class="material-icons-round icon-small" id="icon-vol-mute">volume_mute</span>
+                        <div class="fader-track" id="vol-bg">
+                            <div class="fader-cap" id="vol-knob"></div>
                         </div>
-                        <span class="material-icons-round" style="color:#666; font-size:16px;">volume_up</span>
+                        <span class="material-icons-round icon-small">volume_up</span>
                     </div>
 
-                    <div class="switch-group">
-                        <button class="toggle-btn" id="btn-shuffle"><span class="material-icons-round">shuffle</span></button>
-                        <button class="toggle-btn" id="btn-ai"><span class="material-icons-round" style="color:#bc13fe;">psychology</span></button>
-                        <button class="toggle-btn" id="btn-fx"><span class="material-icons-round">equalizer</span></button>
+                    <!-- Тумблеры -->
+                    <div class="toggle-switches">
+                        <button class="metal-toggle" id="btn-shuffle" title="Shuffle">
+                            <span class="material-icons-round">shuffle</span>
+                        </button>
+                        <button class="metal-toggle ai-mode" id="btn-ai" title="AI DJ">
+                            <span class="material-icons-round">psychology</span>
+                        </button>
+                        <button class="metal-toggle" id="btn-fx" title="Bass">
+                            <span class="material-icons-round">equalizer</span>
+                        </button>
                     </div>
                 </div>
+                
+                <div id="system-log" class="status-line">SYSTEM ONLINE</div>
             </div>
         </div>
         
-        <!-- Overlays -->
+        <!-- Стартовый экран -->
         <div id="start-overlay" class="start-screen">
-            <h1 style="font-family:'Orbitron'; font-size:40px; color:#fff; text-shadow:0 0 20px #00f2ff; margin-bottom:10px;">AURORA</h1>
-            <p style="color:#888; letter-spacing:3px; margin-bottom:40px;">HI-FIDELITY AUDIO</p>
-            <button id="btn-start-system" style="background:transparent; border:2px solid #fff; color:#fff; padding:10px 30px; font-family:'Orbitron'; font-size:16px; cursor:pointer;">POWER ON</button>
+            <h1 class="neon-title">AURORA</h1>
+            <p class="neon-subtitle">HI-FIDELITY AUDIO SYSTEM</p>
+            <button id="btn-start-system" class="power-button">
+                <span class="material-icons-round">power_settings_new</span> POWER
+            </button>
         </div>
 
         <div class="overlay" id="overlay"></div>
-        <div class="drawer" id="drawer-genres">
-            <div class="drawer-header"><h3>TAPE LIBRARY</h3><button class="close-btn" id="close-genres">×</button></div>
-            <div class="scroll-area genre-grid" id="genre-grid"></div>
+        
+        <!-- Меню (Glassmorphism) -->
+        <div class="glass-drawer" id="drawer-genres">
+            <div class="drawer-head">
+                <h3>LIBRARY</h3>
+                <button class="close-icon" onclick="UI.toggleDrawer('genres', false)">×</button>
+            </div>
+            <div class="drawer-content genre-grid" id="genre-grid"></div>
         </div>
-        <div class="drawer" id="drawer-playlist">
-            <div class="drawer-header"><h3>CURRENT TAPE</h3><button class="close-btn" id="close-playlist">×</button></div>
-            <div class="scroll-area" id="playlist-container"></div>
+        
+        <div class="glass-drawer" id="drawer-playlist">
+            <div class="drawer-head">
+                <h3>CURRENT TAPE</h3>
+                <button class="close-icon" onclick="UI.toggleDrawer('playlist', false)">×</button>
+            </div>
+            <div class="drawer-content" id="playlist-container"></div>
         </div>
     </div>
     
-    <div id="ai-modal" class="ai-modal-overlay">
-        <div class="glass-card">
+    <!-- AI Modal -->
+    <div id="ai-modal" class="ai-overlay">
+        <div class="holo-card">
             <h2>AI NEURAL NET</h2>
-            <input type="text" id="ai-input" placeholder="Enter mood..." autocomplete="off">
-            <div style="margin-top:20px;">
-                <button id="btn-ai-cancel" style="background:none; border:none; color:#aaa; margin-right:15px; cursor:pointer;">CANCEL</button>
-                <button id="btn-ai-send" class="neon-btn">GENERATE</button>
+            <p>Describe your vibe...</p>
+            <input type="text" id="ai-input" placeholder="e.g. Night drive in Tokyo..." autocomplete="off">
+            <div class="ai-btns">
+                <button id="btn-ai-cancel" class="text-btn">CANCEL</button>
+                <button id="btn-ai-send" class="neon-action-btn">GENERATE</button>
             </div>
         </div>
     </div>
