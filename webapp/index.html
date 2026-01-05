@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Aurora Tape Deck</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght @500;700&family=Inter:wght @400;600&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-    <!-- Обратите внимание: версия v=30 -->
+    <!-- Версия 30 для сброса кэша стилей -->
     <link rel="stylesheet" href="style.css?v=30">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -16,14 +16,14 @@
     <canvas id="visualizer-canvas"></canvas>
     
     <div id="app-container">
-        <!-- Корпус магнитофона -->
+        <!-- КОРПУС МАГНИТОФОНА -->
         <div class="tape-deck">
             <div class="screw screw-tl"></div>
             <div class="screw screw-tr"></div>
             <div class="screw screw-bl"></div>
             <div class="screw screw-br"></div>
 
-            <!-- Верхняя панель -->
+            <!-- ВЕРХНЯЯ ПАНЕЛЬ -->
             <div class="deck-header">
                 <button class="metal-btn mini" id="btn-open-genres"><span class="material-icons-round">grid_view</span></button>
                 <div class="brand-plate">
@@ -33,7 +33,7 @@
                 <button class="metal-btn mini" id="btn-open-playlist"><span class="material-icons-round">playlist_play</span></button>
             </div>
 
-            <!-- Катушки -->
+            <!-- КАТУШКИ -->
             <div class="reels-section">
                 <div class="reel-container">
                     <div class="reel left" id="reel-left">
@@ -46,7 +46,7 @@
                 <div class="head-block">
                     <div class="tape-path"></div>
                     <div class="head-cover">
-                         <h1 id="track-title-scrolling" class="scrolling-text">СИСТЕМА ГОТОВА</h1>
+                         <h1 id="track-title-scrolling" class="scrolling-text">SYSTEM READY</h1>
                     </div>
                 </div>
 
@@ -59,15 +59,15 @@
                 </div>
             </div>
 
-            <!-- Дисплей -->
+            <!-- ДИСПЛЕЙ -->
             <div class="track-display">
-                <p id="track-artist">Select Tape</p>
+                <p id="track-artist">INSERT TAPE</p>
                 <div class="time-counter">
                     <span id="time-current">0000</span>
                 </div>
             </div>
 
-            <!-- Индикаторы и кнопки -->
+            <!-- ИНДИКАТОРЫ И УПРАВЛЕНИЕ -->
             <div class="controls-section">
                 <div class="vu-meters-container">
                     <div class="vu-meter">
@@ -92,7 +92,7 @@
                 </div>
             </div>
 
-            <!-- Нижняя панель -->
+            <!-- НИЖНЯЯ ПАНЕЛЬ -->
             <div class="bottom-panel">
                 <div class="volume-knob-container">
                     <span class="material-icons-round small-icon" id="icon-vol-mute">volume_off</span>
@@ -109,17 +109,17 @@
                 </div>
             </div>
             
-            <div id="system-log" class="lcd-log">SYSTEM READY</div>
+            <div id="system-log" class="lcd-log">WAITING...</div>
         </div>
 
         <div id="start-overlay" class="start-screen">
             <div class="start-title">AURORA <span style="font-size:12px">HIFI</span></div>
-            <button id="btn-start-system" class="start-btn">INSERT TAPE</button>
+            <button id="btn-start-system" class="start-btn">POWER ON</button>
         </div>
         
         <div class="overlay" id="overlay"></div>
-        <div class="drawer" id="drawer-genres"><h2>Library</h2><div class="scroll-area genre-grid" id="genre-grid"></div></div>
-        <div class="drawer" id="drawer-playlist"><h2>Tape Queue</h2><div class="scroll-area" id="playlist-container"></div></div>
+        <div class="drawer" id="drawer-genres"><h2>Tape Library</h2><div class="scroll-area genre-grid" id="genre-grid"></div></div>
+        <div class="drawer" id="drawer-playlist"><h2>Playlist</h2><div class="scroll-area" id="playlist-container"></div></div>
     </div>
     
     <div id="ai-modal" class="ai-modal-overlay">
