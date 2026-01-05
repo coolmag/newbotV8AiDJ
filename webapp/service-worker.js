@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aurora-tape-v30'; // Обновили версию для сброса кэша
+const CACHE_NAME = 'aurora-hifi-v31'; // Новая версия
 const ASSETS = [
     './', './index.html', './style.css',
     './js/main.js', './js/api.js', './js/player.js',
@@ -20,7 +20,6 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
     if (e.request.method !== 'GET') return;
-    // Игнорируем API и аудио, чтобы не кэшировать их намертво
     if (e.request.url.includes('/api/') || e.request.url.includes('/audio/')) {
         e.respondWith(fetch(e.request));
         return;
