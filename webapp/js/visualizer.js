@@ -3,10 +3,10 @@ let stars = [];
 let isRunning = false;
 let bassFilter = null;
 let animationFrameId = null;
-const STAR_COUNT = 50; 
-const BASE_SPEED = 0.3;
+const STAR_COUNT = 80; // Больше частиц
+const BASE_SPEED = 0.5;
 
-// Для VU метров
+// VU Meter Smoothing
 let smoothedVol = 0;
 
 class Star {
@@ -16,7 +16,8 @@ class Star {
         this.x = (Math.random() - 0.5) * canvas.width * 2;
         this.y = (Math.random() - 0.5) * canvas.height * 2;
         this.z = randomZ ? Math.random() * canvas.width : canvas.width;
-        this.size = Math.random();
+        this.size = Math.random() * 1.5; // Чуть крупнее
+        this.opacity = Math.random();
     }
     update(speed) {
         if (!canvas) return;
@@ -27,10 +28,14 @@ class Star {
         if (!canvas) return;
         const x = (this.x / this.z) * centerX + centerX;
         const y = (this.y / this.z) * centerY + centerY;
-        const r = (1 - this.z / canvas.width) * (2 * this.size + bassIntensity * 2);
-        const alpha = (1 - this.z / canvas.width);
+        
+        // Размер пульсирует от баса
+        const r = (1 - this.z / canvas.width) * (2 * this.size + bassIntensity * 4);
+        const alpha = (1 - this.z / canvas.width) * this.opacity;
+        
         ctx.beginPath();
-        ctx.fillStyle = `rgba(200, 200, 255, ${alpha})`;
+        // Красивый голубоватый оттенок
+        ctx.fillStyle = `rgba(200, 240, 255, ${alpha})`;
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
     }
@@ -40,7 +45,6 @@ async function initialize(audioElement) {
     if (audioCtx && audioCtx.state === 'suspended') await audioCtx.resume();
     if (isRunning) return;
     
-    // Canvas setup
     canvas = document.getElementById('visualizer-canvas');
     if (canvas) {
         ctx = canvas.getContext('2d', { alpha: false });
@@ -93,7 +97,6 @@ function resize() { if(canvas) { canvas.width = window.innerWidth; canvas.height
 
 function updateVUNeedles(volume) {
     // Volume 0 to 1. Map to angle -45deg to +45deg
-    // Add some jitter for realism
     const jitter = (Math.random() - 0.5) * 2; 
     const angle = -45 + (volume * 90) + jitter;
     const clamped = Math.max(-50, Math.min(50, angle));
@@ -102,8 +105,7 @@ function updateVUNeedles(volume) {
     const needleR = document.getElementById('needle-r');
     
     if (needleL) needleL.style.transform = `rotate(${clamped}deg)`;
-    // Right channel slightly different for stereo effect fake
-    if (needleR) needleR.style.transform = `rotate(${clamped * 0.95}deg)`; 
+    if (needleR) needleR.style.transform = `rotate(${clamped * 0.9}deg)`; 
 }
 
 function animate() {
@@ -115,38 +117,30 @@ function animate() {
     
     if (analyser) {
         analyser.getByteFrequencyData(dataArray);
-        // Calculate bass (low frequencies)
-        for(let i = 0; i < 10; i++) bass += dataArray[i];
-        bass = bass / 10 / 255;
+        for(let i = 0; i < 8; i++) bass += dataArray[i];
+        bass = bass / 8 / 255;
         
-        // Calculate average volume for VU meter
         let sum = 0;
         for(let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-        avgVol = sum / dataArray.length / 128; // Normalize roughly 0-1
+        avgVol = sum / dataArray.length / 128;
     }
     
-    // Smooth the volume for VU meter to avoid crazy shaking
     smoothedVol += (avgVol - smoothedVol) * 0.1;
     updateVUNeedles(smoothedVol);
     
-    // Draw Space Background
     if (canvas && ctx) {
-        ctx.fillStyle = '#101015'; // Darker space
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Очистка с прозрачностью для следов (trails) - опционально, тут делаем полную очистку
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         
         const cx = canvas.width / 2;
         const cy = canvas.height / 2;
-        const currentSpeed = BASE_SPEED + (bass * 5); 
+        // Скорость зависит от баса
+        const currentSpeed = BASE_SPEED + (bass * 15); 
         
         stars.forEach(star => { 
             star.update(currentSpeed); 
             star.draw(ctx, cx, cy, bass); 
         });
-    }
-    
-    // Update CSS variables for RGB glow
-    if (bass > 0.01) {
-        document.documentElement.style.setProperty('--beat', bass.toFixed(3));
     }
 }
 

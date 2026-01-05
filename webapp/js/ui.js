@@ -3,82 +3,79 @@ import { MENU_ROOT } from './genres.js';
 import * as haptics from './haptics.js';
 
 let menuStack = [];
-
 function getEl(id) { return document.getElementById(id); }
 
 function renderMenu() {
-    const drawer = getEl('drawer-genres');
+    const drawer = getEl('genre-grid');
     if (!drawer) return;
-    const current = menuStack.length > 0 ? menuStack[menuStack.length - 1] : { title: "Tape Collection", items: MENU_ROOT.children, isRoot: true };
+    const current = menuStack.length > 0 ? menuStack[menuStack.length - 1] : { title: "Library", items: MENU_ROOT.children, isRoot: true };
     drawer.innerHTML = ''; 
+    
+    // Header logic managed by toggleDrawer now
+    
+    // Back button if needed
+    if (!current.isRoot) {
+        const backRow = document.createElement('div');
+        backRow.className = 'menu-row';
+        backRow.innerHTML = `<div class="p-info"><div class="p-title" style="color:#aaa">.. BACK</div></div>`;
+        backRow.onclick = () => { haptics.impact('light'); menuStack.pop(); renderMenu(); };
+        drawer.appendChild(backRow);
+    }
 
-    const header = document.createElement('div');
-    header.className = 'drawer-header';
-    const backBtn = document.createElement('button');
-    backBtn.className = 'nav-btn';
-    backBtn.innerHTML = '<span class="material-icons-round">arrow_back_ios_new</span>';
-    backBtn.onclick = () => { 
-        haptics.impact('light');
-        if (!current.isRoot) { menuStack.pop(); renderMenu(); } 
-    };
-    backBtn.style.visibility = current.isRoot ? 'hidden' : 'visible';
-    const title = document.createElement('div');
-    title.className = 'drawer-title-text';
-    title.textContent = current.title;
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'nav-btn';
-    closeBtn.innerHTML = '<span class="material-icons-round">close</span>';
-    closeBtn.onclick = () => toggleDrawer('genres', false);
-    header.appendChild(backBtn); header.appendChild(title); header.appendChild(closeBtn);
-    drawer.appendChild(header);
-
-    const listContainer = document.createElement('div');
-    listContainer.className = 'scroll-area menu-list';
     current.items.forEach(item => {
         const row = document.createElement('div');
         row.className = 'menu-row';
-        let iconHtml = '';
-        if (item.action === 'random') iconHtml = '<span class="material-icons-round row-icon random">shuffle</span>';
-        else if (item.children) iconHtml = '<span class="material-icons-round row-icon folder">folder</span>';
-        else iconHtml = '<span class="material-icons-round row-icon music">album</span>';
-        const arrowHtml = item.children ? '<span class="material-icons-round row-arrow">chevron_right</span>' : '';
-        row.innerHTML = `<div class="row-left">${iconHtml}<span class="row-title">${item.name}</span></div>${arrowHtml}`;
+        
+        let icon = 'album';
+        if (item.children) icon = 'folder';
+        if (item.action === 'random') icon = 'shuffle';
+        
+        row.innerHTML = `
+            <div class="m-icon"><span class="material-icons-round">${icon}</span></div>
+            <div class="p-info">
+                <div class="p-title">${item.name}</div>
+            </div>
+            ${item.children ? '<span class="material-icons-round arrow">chevron_right</span>' : ''}
+        `;
+        
         row.onclick = () => {
             haptics.impact('light');
-            row.classList.add('clicked');
-            setTimeout(() => row.classList.remove('clicked'), 200);
             if (item.children) {
                 menuStack.push({ title: item.name, items: item.children, isRoot: false });
-                setTimeout(renderMenu, 50); 
+                renderMenu();
             } else {
                 toggleDrawer('genres', false);
                 window.loadGenreHandler(item.action === 'random' ? "top 50 global hits" : item.query);
             }
         };
-        listContainer.appendChild(row);
+        drawer.appendChild(row);
     });
-    drawer.appendChild(listContainer);
 }
 
 function renderPlaylist(playlist, currentIndex, player) {
     const container = getEl('playlist-container');
     if (!container) return;
     container.innerHTML = '';
+    
     if (!playlist || playlist.length === 0) {
-        container.innerHTML = '<div class="empty-state">No Tape Inserted</div>';
+        container.innerHTML = '<div style="text-align:center; color:#555; margin-top:50px;">NO TAPE INSERTED</div>';
         return;
     }
+    
     playlist.forEach((track, idx) => {
         const item = document.createElement('div');
         item.className = `playlist-row ${idx === currentIndex ? 'active' : ''}`;
-        const iconType = idx === currentIndex ? 'graphic_eq' : 'audiotrack';
+        
+        const iconType = idx === currentIndex ? 'equalizer' : 'audiotrack';
+        
         item.innerHTML = `
-            <div class="p-icon-box"><span class="material-icons-round">${iconType}</span></div>
+            <div class="p-icon"><span class="material-icons-round" style="${idx===currentIndex?'color:var(--primary-glow)':''}">${iconType}</span></div>
             <div class="p-info">
                 <div class="p-title">${track.title}</div>
                 <div class="p-artist">${track.artist}</div>
             </div>
         `;
+        
         item.onclick = () => { 
             haptics.impact('medium');
             player.playTrack(idx); 
@@ -86,6 +83,7 @@ function renderPlaylist(playlist, currentIndex, player) {
         };
         container.appendChild(item);
     });
+    
     const activeEl = container.querySelector('.active');
     if (activeEl) activeEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
@@ -94,22 +92,22 @@ function toggleDrawer(name, show) {
     const overlay = getEl('overlay');
     const dGenres = getEl('drawer-genres');
     const dPlaylist = getEl('drawer-playlist');
+    
+    // Reset all
+    if (overlay) overlay.classList.remove('active');
+    if (dGenres) dGenres.classList.remove('active');
+    if (dPlaylist) dPlaylist.classList.remove('active');
+    
     if (show) {
         haptics.impact('medium');
-        if(overlay) overlay.classList.add('active');
-        if (name === 'genres') { 
-            if(dGenres) dGenres.classList.add('active'); 
-            if(dPlaylist) dPlaylist.classList.remove('active'); 
-            if (menuStack.length === 0) renderMenu(); 
+        if (overlay) overlay.classList.add('active');
+        
+        if (name === 'genres') {
+            if (dGenres) dGenres.classList.add('active');
+            if (menuStack.length === 0) renderMenu();
+        } else if (name === 'playlist') {
+            if (dPlaylist) dPlaylist.classList.add('active');
         }
-        if (name === 'playlist') { 
-            if(dPlaylist) dPlaylist.classList.add('active'); 
-            if(dGenres) dGenres.classList.remove('active'); 
-        }
-    } else {
-        if(overlay) overlay.classList.remove('active');
-        if(dGenres) dGenres.classList.remove('active');
-        if(dPlaylist) dPlaylist.classList.remove('active');
     }
 }
 
@@ -131,23 +129,37 @@ function initialize(player) {
     subscribe('playlist', (list) => renderPlaylist(list, store.currentTrackIndex, player));
 
     const audio = player.getAudioElement();
+    
+    // Seek Bar Logic
+    const seekBar = getEl('seek-bar');
+    const seekFill = getEl('seek-fill');
+    
     audio.addEventListener('timeupdate', () => {
         if (!audio.duration) return;
-        // Update tape counter format
-        const curr = Math.floor(audio.currentTime);
-        const el = getEl('time-current');
-        if (el) el.textContent = curr.toString().padStart(4, '0');
+        const pct = (audio.currentTime / audio.duration) * 100;
+        if (seekFill) seekFill.style.width = pct + '%';
     });
+    
+    if (seekBar) {
+        seekBar.onclick = (e) => {
+            const rect = seekBar.getBoundingClientRect();
+            const p = (e.clientX - rect.left) / rect.width;
+            player.seek(p);
+        };
+    }
 
     const bind = (id, fn) => { 
         const el = getEl(id); 
         if(el) el.onclick = () => { haptics.impact('light'); fn(); }; 
     };
+    
     bind('btn-play-pause', () => player.togglePlay());
     bind('btn-next', () => player.nextTrack());
     bind('btn-prev', () => player.prevTrack());
     bind('btn-open-genres', () => toggleDrawer('genres', true));
     bind('btn-open-playlist', () => toggleDrawer('playlist', true));
+    bind('close-genres', () => toggleDrawer('genres', false));
+    bind('close-playlist', () => toggleDrawer('playlist', false));
     bind('overlay', () => toggleDrawer(null, false));
     
     // FX Button
@@ -156,12 +168,12 @@ function initialize(player) {
         btnFx.onclick = () => {
             haptics.impact('medium');
             const isActive = player.toggleBassBoost();
-            btnFx.style.background = isActive ? 'radial-gradient(circle, #00f2ff, #0099aa)' : '';
-            btnFx.style.boxShadow = isActive ? '0 0 10px #00f2ff' : '';
+            btnFx.style.background = isActive ? '#ccc' : '#e0e0e0';
+            btnFx.querySelector('span').style.color = isActive ? '#00f2ff' : '#444';
         };
     }
 
-    // Volume Slider (Knob logic simplified to slider)
+    // Volume Slider
     const volBg = getEl('vol-bg');
     const volKnob = getEl('vol-knob');
     if (volBg && volKnob) {
@@ -181,7 +193,6 @@ function initialize(player) {
         document.addEventListener('mouseup', () => isVolDragging = false);
         document.addEventListener('touchend', () => isVolDragging = false);
         
-        // Init pos
         volKnob.style.left = (audio.volume * 100) + '%';
         volKnob.style.transform = `translateX(-50%)`;
     }
