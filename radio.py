@@ -32,7 +32,7 @@ def get_now_playing_message(track: TrackInfo, genre_name: str) -> str:
     artist = track.artist[:30].strip()
     return f"{icon} *{title}*\n👤 {artist}\n⏱ {format_duration(track.duration)} | 📻 _{genre_name}_"
 
- @dataclass
+@dataclass
 class RadioSession:
     chat_id: int
     bot: Bot
@@ -112,7 +112,7 @@ class RadioSession:
             
         try:
             tracks = await self.downloader.search(target_query, decade=self.decade, limit=25)
-            if not self.is_running: return # Проверка на случай если заблочили во время поиска
+            if not self.is_running: return
 
             new_tracks = [t for t in tracks if t.identifier not in self.played_ids]
             if new_tracks:
@@ -139,7 +139,6 @@ class RadioSession:
                     logger.info(f"[{self.chat_id}] Плейлист пуст. Пробую резервные частоты...")
                     await self._update_status("⚠️ Сигнал слаб. Ищу резервную волну...")
                     
-                    # Разные фолбэки в зависимости от оригинального запроса
                     fallbacks = ["global top 50 hits", "lofi hip hop radio", "80s greatest hits", "viral pop hits"]
                     if "rock" in self.query.lower(): fallbacks = ["classic rock hits", "modern rock radio"]
                     
@@ -157,7 +156,6 @@ class RadioSession:
                 # 3. Воспроизведение
                 track = self.playlist.pop(0)
                 self.played_ids.add(track.identifier)
-                # Ограничиваем историю, чтобы память не текла
                 if len(self.played_ids) > 200: 
                     self.played_ids = set(list(self.played_ids)[100:])
 
@@ -165,7 +163,6 @@ class RadioSession:
                 
                 if success:
                     consecutive_errors = 0
-                    # Ждем конца трека или пропуска
                     wait_time = min(track.duration, 300) if track.duration > 0 else 180
                     try: 
                         await asyncio.wait_for(self.skip_event.wait(), timeout=wait_time)
@@ -173,7 +170,6 @@ class RadioSession:
                         pass 
                 else:
                     consecutive_errors += 1
-                    # Экспоненциальная задержка при ошибках, но не более 60 сек
                     wait_backoff = min(5 * consecutive_errors, 60)
                     await asyncio.sleep(wait_backoff)
                 
@@ -191,7 +187,6 @@ class RadioSession:
         if not self.is_running: return False
         try:
             await self._update_status(f"⬇️ Загрузка: *{track.title}*...")
-            # Проверяем is_running снова после await
             if not self.is_running: return False
 
             result = await self.downloader.download(track.identifier)
@@ -228,7 +223,6 @@ class RadioSession:
             logger.error(f"Play wrapper error: {e}")
             return False
         finally:
-            # Очистка файла (если он не закэширован как file_id, удаляем локально для экономии места, если нужно)
             if result and result.file_path and os.path.exists(result.file_path):
                 try: os.unlink(result.file_path)
                 except: pass
@@ -246,8 +240,6 @@ class RadioManager:
     async def start(self, chat_id: int, query: str, chat_type: Optional[str] = None, display_name: Optional[str] = None, decade: Optional[str] = None):
         async with self._get_lock(chat_id):
             if chat_id in self._sessions: 
-                # Если сессия уже есть, просто скипаем трек или меняем запрос?
-                # Для простоты - перезапускаем
                 await self._sessions[chat_id].stop()
             
             if query == "random": 
@@ -281,27 +273,16 @@ class RadioManager:
 
     def _get_random_query(self) -> tuple[str, Optional[str], str]:
         all_queries = []
-        def _flatten(cat):
-            for k, v in cat.items():
-                if isinstance(v, dict): _flatten(v)
-                else: 
-                    # v can be a string (query) or dict
-                    pass 
-                # Исправленная логика обхода (структура сложная)
-                # В текущем catalog.py: ключи -> вложенные dict -> в конце строка (query)
-        
-        # Упрощенный сбор всех query из MUSIC_CATALOG
-        def extract_queries(node, path=""):
+        def extract_queries(node):
             for key, val in node.items():
                 if isinstance(val, dict):
-                    if "query" in val: # Это конечный узел
+                    if "query" in val:
                         all_queries.append((val["query"], None, val["name"]))
-                    elif "children" in val: # Это структура меню
+                    elif "children" in val:
                         extract_queries(val["children"])
-                    else: # Просто вложенность (как в старом формате)
+                    else:
                         extract_queries(val)
-                elif isinstance(val, str) and key != "name" and key != "action":
-                     # Старый формат каталога
+                elif isinstance(val, str) and key not in ["name", "action"]:
                      all_queries.append((val, None, key))
 
         extract_queries(MUSIC_CATALOG)

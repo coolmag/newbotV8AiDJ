@@ -10,7 +10,7 @@ import re
 
 # Условный импорт Google
 try:
-    import google.generativeai as genai
+    import google.genai as genai
     HAS_AI_LIB = True
 except ImportError:
     HAS_AI_LIB = False
