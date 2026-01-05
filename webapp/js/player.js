@@ -13,33 +13,50 @@ function setupAudioContext() {
     }
 }
 
+function updateReelsState(playing) {
+    const reels = document.querySelectorAll('.reel');
+    reels.forEach(r => {
+        if (playing) r.classList.add('spinning');
+        else r.classList.remove('spinning');
+    });
+    
+    const playBtn = document.getElementById('btn-play-pause');
+    if (playBtn) {
+        if (playing) playBtn.classList.add('active');
+        else playBtn.classList.remove('active');
+    }
+}
+
 function setupAudioListeners() {
-    audio.addEventListener('loadstart', () => reportStatus('loading', 'УСТАНОВКА СОЕДИНЕНИЯ...'));
-    audio.addEventListener('waiting', () => reportStatus('loading', 'БУФЕРИЗАЦИЯ...'));
+    audio.addEventListener('loadstart', () => reportStatus('loading', 'LOADING TAPE...'));
+    audio.addEventListener('waiting', () => reportStatus('loading', 'BUFFERING...'));
     audio.addEventListener('canplay', () => {
-        reportStatus('ready', 'ПОТОК ГОТОВ');
+        reportStatus('ready', 'TAPE READY');
         if (store.isPlaying) safePlay();
     });
     audio.addEventListener('play', () => {
         store.isPlaying = true;
-        reportStatus('playing', 'ВОСПРОИЗВЕДЕНИЕ');
-        document.documentElement.style.setProperty('--reactor-color', '#00f2ff');
+        updateReelsState(true);
+        reportStatus('playing', 'PLAYING');
+        document.documentElement.style.setProperty('--reactor-color', '#00f2ff'); // Cyan
         updateMediaSession();
     });
     audio.addEventListener('pause', () => {
         store.isPlaying = false;
-        reportStatus('paused', 'ПАУЗА');
-        document.documentElement.style.setProperty('--reactor-color', '#ff0055');
+        updateReelsState(false);
+        reportStatus('paused', 'STOPPED');
+        document.documentElement.style.setProperty('--reactor-color', '#ff0055'); // Red
     });
     audio.addEventListener('error', (e) => {
         console.error("Audio Error:", e);
-        reportStatus('error', 'ОШИБКА ПОТОКА...');
+        updateReelsState(false);
+        reportStatus('error', 'TAPE ERROR');
         document.documentElement.style.setProperty('--reactor-color', '#ff0000');
         setTimeout(() => nextTrack(), 2000);
     });
-    audio.addEventListener('ended', () => nextTrack());
-    audio.addEventListener('pause', () => {
-        if (store.isPlaying && audio.paused) store.isPlaying = false;
+    audio.addEventListener('ended', () => {
+        updateReelsState(false);
+        nextTrack();
     });
 }
 
@@ -47,10 +64,12 @@ async function safePlay() {
     try {
         await audio.play();
         updateMediaSession();
+        updateReelsState(true);
     } catch (e) {
         console.warn("Autoplay blocked:", e);
         store.isPlaying = false;
-        reportStatus('paused', 'НАЖМИТЕ PLAY');
+        updateReelsState(false);
+        reportStatus('paused', 'PRESS PLAY');
     }
 }
 
@@ -66,7 +85,7 @@ function updateMediaSession() {
     navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: track.artist,
-        album: 'Aurora AI Radio',
+        album: 'Aurora Deck',
         artwork: artwork
     });
 
@@ -90,8 +109,8 @@ async function playTrack(index) {
     store.currentTrackIndex = index;
     const track = store.playlist[index];
     store.isPlaying = true;
-    reportStatus('loading', `ЗАГРУЗКА: ${track.title.toUpperCase().substring(0, 20)}...`);
-    document.documentElement.style.setProperty('--reactor-color', '#ffe600');
+    reportStatus('loading', `LOADING: ${track.title.toUpperCase().substring(0, 20)}`);
+    document.documentElement.style.setProperty('--reactor-color', '#ffe600'); // Yellow loading
     audio.src = `/audio/${track.identifier}.mp3`;
     updateMediaSession();
     audio.load();
@@ -125,7 +144,7 @@ function seek(pct) {
 function toggleBassBoost() {
     isBassBoosted = !isBassBoosted;
     Visualizer.setBassBoost(isBassBoosted);
-    reportStatus('info', `УСИЛЕНИЕ БАСА: ${isBassBoosted ? 'ВКЛ' : 'ВЫКЛ'}`);
+    reportStatus('info', `BASS BOOST: ${isBassBoosted ? 'ON' : 'OFF'}`);
     return isBassBoosted;
 }
 
