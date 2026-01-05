@@ -11,13 +11,14 @@ function renderMenu() {
     const current = menuStack.length > 0 ? menuStack[menuStack.length - 1] : { title: "Library", items: MENU_ROOT.children, isRoot: true };
     drawer.innerHTML = ''; 
     
-    // Header logic managed by toggleDrawer now
-    
-    // Back button if needed
+    // Back button
     if (!current.isRoot) {
         const backRow = document.createElement('div');
         backRow.className = 'menu-row';
-        backRow.innerHTML = `<div class="p-info"><div class="p-title" style="color:#aaa">.. BACK</div></div>`;
+        backRow.innerHTML = `
+            <div class="icon-box"><span class="material-icons-round">arrow_back</span></div>
+            <div class="p-info"><div class="p-title">BACK</div></div>
+        `;
         backRow.onclick = () => { haptics.impact('light'); menuStack.pop(); renderMenu(); };
         drawer.appendChild(backRow);
     }
@@ -31,11 +32,11 @@ function renderMenu() {
         if (item.action === 'random') icon = 'shuffle';
         
         row.innerHTML = `
-            <div class="m-icon"><span class="material-icons-round">${icon}</span></div>
+            <div class="icon-box"><span class="material-icons-round">${icon}</span></div>
             <div class="p-info">
                 <div class="p-title">${item.name}</div>
             </div>
-            ${item.children ? '<span class="material-icons-round arrow">chevron_right</span>' : ''}
+            ${item.children ? '<span class="material-icons-round" style="color:#666">chevron_right</span>' : ''}
         `;
         
         row.onclick = () => {
@@ -58,7 +59,7 @@ function renderPlaylist(playlist, currentIndex, player) {
     container.innerHTML = '';
     
     if (!playlist || playlist.length === 0) {
-        container.innerHTML = '<div style="text-align:center; color:#555; margin-top:50px;">NO TAPE INSERTED</div>';
+        container.innerHTML = '<div style="text-align:center; color:#555; margin-top:50px;">NO TAPE LOADED</div>';
         return;
     }
     
@@ -66,10 +67,10 @@ function renderPlaylist(playlist, currentIndex, player) {
         const item = document.createElement('div');
         item.className = `playlist-row ${idx === currentIndex ? 'active' : ''}`;
         
-        const iconType = idx === currentIndex ? 'equalizer' : 'audiotrack';
+        const iconType = idx === currentIndex ? 'graphic_eq' : 'music_note';
         
         item.innerHTML = `
-            <div class="p-icon"><span class="material-icons-round" style="${idx===currentIndex?'color:var(--primary-glow)':''}">${iconType}</span></div>
+            <div class="icon-box"><span class="material-icons-round" style="${idx===currentIndex?'color:var(--primary-neon)':''}">${iconType}</span></div>
             <div class="p-info">
                 <div class="p-title">${track.title}</div>
                 <div class="p-artist">${track.artist}</div>
@@ -93,7 +94,6 @@ function toggleDrawer(name, show) {
     const dGenres = getEl('drawer-genres');
     const dPlaylist = getEl('drawer-playlist');
     
-    // Reset all
     if (overlay) overlay.classList.remove('active');
     if (dGenres) dGenres.classList.remove('active');
     if (dPlaylist) dPlaylist.classList.remove('active');
@@ -120,24 +120,24 @@ function initialize(player) {
             const artistEl = getEl('track-artist');
             if (artistEl) artistEl.textContent = track.artist;
             
-            if ('mediaSession' in navigator) {
-                navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist });
-            }
+            // Update counter
+            const counter = getEl('time-current');
+            if (counter) counter.style.color = '#ffeb3b'; // Active yellow
         }
         renderPlaylist(store.playlist, idx, player);
     });
     subscribe('playlist', (list) => renderPlaylist(list, store.currentTrackIndex, player));
 
     const audio = player.getAudioElement();
-    
-    // Seek Bar Logic
     const seekBar = getEl('seek-bar');
     const seekFill = getEl('seek-fill');
+    const counter = getEl('time-current');
     
     audio.addEventListener('timeupdate', () => {
         if (!audio.duration) return;
         const pct = (audio.currentTime / audio.duration) * 100;
         if (seekFill) seekFill.style.width = pct + '%';
+        if (counter) counter.textContent = Math.floor(audio.currentTime).toString().padStart(4, '0');
     });
     
     if (seekBar) {
@@ -158,22 +158,20 @@ function initialize(player) {
     bind('btn-prev', () => player.prevTrack());
     bind('btn-open-genres', () => toggleDrawer('genres', true));
     bind('btn-open-playlist', () => toggleDrawer('playlist', true));
-    bind('close-genres', () => toggleDrawer('genres', false));
-    bind('close-playlist', () => toggleDrawer('playlist', false));
     bind('overlay', () => toggleDrawer(null, false));
     
-    // FX Button
     const btnFx = getEl('btn-fx');
     if(btnFx) {
         btnFx.onclick = () => {
             haptics.impact('medium');
             const isActive = player.toggleBassBoost();
-            btnFx.style.background = isActive ? '#ccc' : '#e0e0e0';
-            btnFx.querySelector('span').style.color = isActive ? '#00f2ff' : '#444';
+            btnFx.style.background = isActive ? '#aaa' : '#e0e0e0';
+            const span = btnFx.querySelector('span');
+            if(span) span.style.color = isActive ? 'var(--primary-neon)' : '#444';
         };
     }
 
-    // Volume Slider
+    // Volume
     const volBg = getEl('vol-bg');
     const volKnob = getEl('vol-knob');
     if (volBg && volKnob) {
