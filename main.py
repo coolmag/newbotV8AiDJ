@@ -118,7 +118,7 @@ async def ai_dj_generate(prompt: str, request: Request):
 
     try:
         # Используем стабильную модель gemini-pro
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(f"{system_instruction}\n\nQuery: {prompt}")
         
         clean_text = re.sub(r"```json|```", "", response.text).strip()
