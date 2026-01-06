@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aurora-hifi-v36'; // FORCE UPDATE
+const CACHE_NAME = 'aurora-hifi-v39';
 const ASSETS = [
     './', './index.html', './style.css',
     './js/main.js', './js/api.js', './js/player.js',
