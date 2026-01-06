@@ -8,7 +8,7 @@ import os
 import json
 import re
 
-# Настройка AI
+# Стабильный импорт
 HAS_AI_LIB = False
 try:
     import google.generativeai as genai
@@ -36,7 +36,7 @@ if GEMINI_KEY and HAS_AI_LIB:
     try:
         genai.configure(api_key=GEMINI_KEY)
         logger = logging.getLogger(__name__)
-        logger.info("🧠 Gemini AI connected successfully.")
+        logger.info("🧠 Gemini AI (Stable) connected.")
     except Exception as e:
         print(f"⚠️ Gemini Config Error: {e}")
         HAS_AI_LIB = False
@@ -102,30 +102,41 @@ app.add_middleware(
 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
+    """
+    Генерация плейлиста (Stable).
+    """
     if not HAS_AI_LIB or not GEMINI_KEY:
         downloader: YouTubeDownloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt + " music", limit=10)
-        return {"dj_intro": "AI module offline. Standard search.", "playlist": tracks}
+        return {"dj_intro": "", "playlist": tracks} # Пустое интро, чтобы не болтал лишнего
 
     logger.info(f"[AI] Generating for: {prompt}")
 
     system_instruction = """
     Ты — DJ Aurora.
-    1. Подбери 5 треков под запрос.
-    2. Придумай интро (1 фраза, русский).
-    JSON: {"intro": "...", "tracks": ["Artist - Title"]}
+    Твоя задача:
+    1. Подобрать 5 треков (Artist - Title) под настроение пользователя.
+    2. Написать ОЧЕНЬ короткую фразу (Intro) на русском языке (максимум 5-6 слов).
+    
+    Пример ответа (JSON):
+    {"intro": "Включаю режим ночного драйва.", "tracks": ["Kavinsky - Nightcall", "The Weeknd - Blinding Lights"]}
     """
 
     try:
-        # Используем стабильную модель gemini-pro
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(f"{system_instruction}\n\nQuery: {prompt}")
+        # Используем gemini-pro (она есть везде) или flash
+        # Пробуем Flash, если нет - Pro
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(f"{system_instruction}\n\nЗапрос: {prompt}")
+        except:
+            model = genai.GenerativeModel('gemini-pro')
+            response = model.generate_content(f"{system_instruction}\n\nЗапрос: {prompt}")
         
         clean_text = re.sub(r"```json|```", "", response.text).strip()
         data = json.loads(clean_text)
         
         tracks_query = data.get("tracks", [])
-        intro = data.get("intro", "Aurora выполняет запрос.")
+        intro = data.get("intro", "Поиск завершен.")
         
         downloader: YouTubeDownloader = request.app.state.downloader
         final_playlist = []
@@ -143,7 +154,8 @@ async def ai_dj_generate(prompt: str, request: Request):
         logger.error(f"[AI Error] {e}")
         downloader: YouTubeDownloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
-        return {"dj_intro": "AI Error. Fallback.", "playlist": tracks}
+        # Возвращаем пустую строку в интро, чтобы он молчал при ошибке
+        return {"dj_intro": "", "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
