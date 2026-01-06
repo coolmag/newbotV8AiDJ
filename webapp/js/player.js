@@ -14,12 +14,14 @@ function setupAudioContext() {
 }
 
 function updateReelsState(playing) {
-    const reels = document.querySelectorAll('.reel');
+    // ВАЖНО: Ищем правильный класс для анимации
+    const reels = document.querySelectorAll('.reel-hub');
     reels.forEach(r => {
         if (playing) r.classList.add('spinning');
         else r.classList.remove('spinning');
     });
     
+    // Лампочка на кнопке
     const playBtn = document.getElementById('btn-play-pause');
     if (playBtn) {
         if (playing) playBtn.classList.add('active');
@@ -44,7 +46,7 @@ function setupAudioListeners() {
     });
     
     audio.addEventListener('pause', () => {
-        // Не сбрасываем isPlaying сразу, если это просто буферизация
+        store.isPlaying = false;
         updateReelsState(false);
         reportStatus('paused', 'STOPPED');
     });
@@ -67,7 +69,6 @@ async function safePlay() {
         updateMediaSession();
         updateReelsState(true);
     } catch (e) {
-        // Игнорируем ошибку прерывания, это нормально при быстром переключении
         if (e.name !== 'AbortError') {
             console.warn("Play error:", e);
             store.isPlaying = false;
@@ -107,10 +108,7 @@ async function playTrack(index) {
     store.currentTrackIndex = index;
     const track = store.playlist[index];
     store.isPlaying = true;
-    
-    // Эффект вставки кассеты
     reportStatus('loading', `LOADING: ${track.title.substring(0,15)}...`);
-    
     audio.src = `/audio/${track.identifier}.mp3`;
     updateMediaSession();
     audio.load();
