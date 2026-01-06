@@ -94,6 +94,7 @@ function toggleDrawer(name, show) {
     const dGenres = getEl('drawer-genres');
     const dPlaylist = getEl('drawer-playlist');
     
+    // Reset classes
     if (overlay) overlay.classList.remove('active');
     if (dGenres) dGenres.classList.remove('active');
     if (dPlaylist) dPlaylist.classList.remove('active');
@@ -119,10 +120,6 @@ function initialize(player) {
             if (el) el.textContent = `${track.artist} - ${track.title} *** `;
             const artistEl = getEl('track-artist');
             if (artistEl) artistEl.textContent = track.artist;
-            
-            // Update counter
-            const counter = getEl('time-current');
-            if (counter) counter.style.color = '#ffeb3b'; // Active yellow
         }
         renderPlaylist(store.playlist, idx, player);
     });
