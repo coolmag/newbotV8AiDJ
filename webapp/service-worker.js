@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aurora-hifi-v39';
+const CACHE_NAME = 'aurora-hifi-v40';
 const ASSETS = [
     './', './index.html', './style.css',
     './js/main.js', './js/api.js', './js/player.js',
