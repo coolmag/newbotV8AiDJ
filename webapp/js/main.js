@@ -9,31 +9,38 @@ const logger = {
     el: null,
     init() { this.el = document.getElementById('system-log'); },
     print(msg, type = 'info') {
-        // Логгер убран из UI, но оставим в консоли для дебага
-        console.log(`[SYS] ${msg}`);
         const logLed = document.getElementById('system-log');
         if (logLed) {
             logLed.textContent = msg;
-            logLed.style.color = type === 'error' ? '#f00' : '#0f0';
+            logLed.style.color = type === 'error' ? '#f00' : '#444';
         }
     }
 };
 
+function toggleLoader(show, text = "LOADING...") {
+    const loader = document.getElementById('deck-loader');
+    const txt = loader.querySelector('.loader-text');
+    if (show) {
+        if (txt) txt.textContent = text;
+        loader.classList.add('active');
+    } else {
+        loader.classList.remove('active');
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     logger.init();
     
-    // SAFE TELEGRAM INIT
     try {
         const tg = window.Telegram?.WebApp;
         if (tg) { 
             tg.expand(); 
-            // Проверка версии перед вызовом новых методов
             if (tg.isVersionAtLeast && tg.isVersionAtLeast('6.1')) {
                 tg.setHeaderColor('#0a0a0f'); 
                 tg.setBackgroundColor('#0a0a0f'); 
             }
         }
-    } catch (e) { console.warn("TG Init Error:", e); }
+    } catch (e) {}
 
     Player.setStatusCallback((state, message) => {
         logger.print(message, state === 'error' ? 'error' : 'info');
@@ -54,7 +61,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e && e.cancelable) e.preventDefault();
         const audio = Player.getAudioElement();
         try {
-            // Тихая инициализация аудио контекста
             if (audio.paused) {
                 await audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(() => {});
             }
@@ -75,27 +81,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.loadGenreHandler = async (query) => {
-        // Закрываем меню, если открыто
-        const genreDrawer = document.getElementById('drawer-genres');
-        if (genreDrawer) genreDrawer.classList.remove('active');
-        const overlay = document.getElementById('overlay');
-        if (overlay) overlay.classList.remove('active');
-
-        logger.print(`SCANNING: ${query.toUpperCase()}`);
-        const tTitle = document.getElementById('track-title-scrolling');
-        if(tTitle) tTitle.textContent = "SEARCHING TAPE...";
+        UI.toggleDrawer('genres', false);
+        toggleLoader(true, `SCANNING: ${query.toUpperCase()}`);
         
         try {
             const playlist = await fetchPlaylist(query);
             store.playlist = playlist;
+            toggleLoader(false);
+            
             if (playlist && playlist.length > 0) { 
-                logger.print(`FOUND ${playlist.length} TRACKS`); 
                 Player.playTrack(0); 
             } else { 
                 logger.print('NO TAPE FOUND', 'error'); 
-                if(tTitle) tTitle.textContent = "EMPTY DECK"; 
             }
         } catch (err) { 
+            toggleLoader(false);
             logger.print('NET ERROR', 'error'); 
         }
     };
@@ -104,7 +104,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnShuffle) {
         btnShuffle.onclick = () => {
             if (!store.playlist || store.playlist.length < 2) return;
-            // Fisher-Yates shuffle
             for (let i = store.playlist.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
                 [store.playlist[i], store.playlist[j]] = [store.playlist[j], store.playlist[i]];
@@ -114,7 +113,6 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    // AI Logic
     const aiBtn = document.getElementById('btn-ai');
     const aiModal = document.getElementById('ai-modal');
     const aiInput = document.getElementById('ai-input');
@@ -130,10 +128,11 @@ document.addEventListener('DOMContentLoaded', () => {
         aiModal.classList.remove('active');
         aiInput.value = '';
         
-        const tTitle = document.getElementById('track-title-scrolling');
-        if(tTitle) tTitle.textContent = "NEURAL PROCESSING...";
+        toggleLoader(true, "NEURAL PROCESSING...");
         
         const playlist = await AI.askAurora(prompt);
+        toggleLoader(false);
+        
         if (playlist && playlist.length > 0) { 
             store.playlist = playlist; 
             Player.playTrack(0); 
