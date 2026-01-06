@@ -4,76 +4,75 @@ import { store } from './store.js';
 const SYNTH = window.speechSynthesis;
 
 export async function askAurora(userPrompt) {
-    console.log(`[AI] Neural Request: ${userPrompt}`);
+    console.log(`[AI] Request: ${userPrompt}`);
     
-    // Визуальный эффект "Думает"
     const titleEl = document.getElementById('track-title-scrolling');
-    if (titleEl) titleEl.textContent = "NEURAL PROCESSING...";
+    if (titleEl) titleEl.textContent = "AI PROCESSING...";
 
     try {
-        // 1. Реальный запрос к AI DJ на бэкенде
         const response = await fetch(`/api/ai/dj?prompt=${encodeURIComponent(userPrompt)}`);
         
-        if (!response.ok) throw new Error("AI Server Offline");
+        if (!response.ok) throw new Error("AI Offline");
         
         const data = await response.json();
         
-        // 2. Озвучка ответа (DJ Intro)
-        if (data.dj_intro) {
+        // ОЗВУЧКА ТОЛЬКО ЕСЛИ ЕСТЬ ТЕКСТ И ЭТО НЕ ОШИБКА
+        if (data.dj_intro && data.dj_intro.length > 2 && !data.dj_intro.includes("Error")) {
             speak(data.dj_intro);
         }
 
-        // 3. Возвращаем плейлист
         if (data.playlist && data.playlist.length > 0) {
             return data.playlist;
         } else {
-            // Фолбэк, если AI не нашел треки
-            speak("Сигнал потерян. Включаю резервный канал.");
             return await fetchPlaylist(userPrompt + " mix");
         }
 
     } catch (e) {
         console.error("[AI] Error:", e);
-        // Если сервер лежит, работаем по старинке
+        // Молчаливый фолбэк
         return await fetchPlaylist(userPrompt + " music");
     }
 }
 
 function speak(text) {
     if (!SYNTH) return;
-    SYNTH.cancel(); // Остановить предыдущую речь
+    SYNTH.cancel(); 
     
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'ru-RU'; // Русский голос
-    u.rate = 1.0; 
-    u.pitch = 0.9; // Чуть ниже, более "роботизированно"
+    u.lang = 'ru-RU';
+    u.rate = 0.9; // Чуть медленнее, чтобы было разборчиво
+    u.pitch = 1.0; 
 
-    // Приглушаем музыку во время речи
+    // Приглушение музыки
     const audio = document.getElementById('audio-player');
     let prevVol = 1.0;
     if (audio) {
         prevVol = audio.volume;
-        // Плавное затухание
-        const fadeOut = setInterval(() => {
-            if (audio.volume > 0.2) audio.volume -= 0.1;
-            else clearInterval(fadeOut);
-        }, 50);
+        audio.volume = 0.3; // Тише
     }
 
     u.onend = () => { 
-        // Возвращаем громкость
         if (audio) {
+            // Плавный возврат громкости
+            let v = 0.3;
             const fadeIn = setInterval(() => {
-                if (audio.volume < prevVol) audio.volume += 0.1;
-                else clearInterval(fadeIn);
-            }, 50);
+                if (v < prevVol) {
+                    v += 0.1;
+                    audio.volume = Math.min(v, 1.0);
+                } else clearInterval(fadeIn);
+            }, 100);
         }
     };
 
-    // Пытаемся найти женский русский голос (Google Русский / Microsoft Irina)
+    // Поиск русского голоса
     const voices = SYNTH.getVoices();
-    const ruVoice = voices.find(v => v.lang.includes('ru') && (v.name.includes('Google') || v.name.includes('Female')));
+    // Предпочтение Google голосам
+    const ruVoice = voices.find(v => v.lang.includes('ru') && v.name.includes('Google'));
+    // Если нет, любой русский
+    const anyRu = voices.find(v => v.lang.includes('ru'));
+    
     if (ruVoice) u.voice = ruVoice;
+    else if (anyRu) u.voice = anyRu;
 
     SYNTH.speak(u);
 }
