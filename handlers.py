@@ -14,7 +14,7 @@ from telegram.ext import (
 
 from radio import RadioManager
 from config import Settings
-from catalog import MUSIC_CATALOG # Импорт из нового файла
+from catalog import MUSIC_CATALOG
 from youtube import YouTubeDownloader
 from keyboards import (
     get_track_search_keyboard, 
