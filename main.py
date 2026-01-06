@@ -103,12 +103,12 @@ app.add_middleware(
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     """
-    Генерация плейлиста (Stable).
+    Генерация плейлиста (Stable v1.0).
     """
     if not HAS_AI_LIB or not GEMINI_KEY:
         downloader: YouTubeDownloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt + " music", limit=10)
-        return {"dj_intro": "", "playlist": tracks} # Пустое интро, чтобы не болтал лишнего
+        return {"dj_intro": "", "playlist": tracks}
 
     logger.info(f"[AI] Generating for: {prompt}")
 
@@ -123,13 +123,13 @@ async def ai_dj_generate(prompt: str, request: Request):
     """
 
     try:
-        # Используем gemini-pro (она есть везде) или flash
-        # Пробуем Flash, если нет - Pro
+        # ИСПОЛЬЗУЕМ GEMINI-1.0-PRO (Самая совместимая версия)
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-1.0-pro')
             response = model.generate_content(f"{system_instruction}\n\nЗапрос: {prompt}")
-        except:
-            model = genai.GenerativeModel('gemini-pro')
+        except Exception:
+            # Если и она не работает, пробуем самую базовую
+            model = genai.GenerativeModel('gemini-pro') 
             response = model.generate_content(f"{system_instruction}\n\nЗапрос: {prompt}")
         
         clean_text = re.sub(r"```json|```", "", response.text).strip()
@@ -154,7 +154,6 @@ async def ai_dj_generate(prompt: str, request: Request):
         logger.error(f"[AI Error] {e}")
         downloader: YouTubeDownloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
-        # Возвращаем пустую строку в интро, чтобы он молчал при ошибке
         return {"dj_intro": "", "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
