@@ -9,5 +9,5 @@ httpx==0.27.0
 psutil==5.9.8
 nest-asyncio==1.6.0
 ytmusicapi==1.5.3
-# СТАБИЛЬНАЯ ВЕРСИЯ
-google-generativeai==0.8.3
+# Обновляем до последней версии
+google-generativeai>=0.8.3
