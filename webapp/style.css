@@ -40,7 +40,7 @@ body {
     box-shadow: 0 40px 80px rgba(0,0,0,0.8);
     display: flex;
     border-radius: 4px;
-    z-index: 10; /* Lower than drawers */
+    z-index: 10;
 }
 
 .side-panel {
@@ -228,14 +228,17 @@ body {
 .drawer.active { transform: translateY(0); }
 
 .drawer-head {
-    padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.08);
+    padding: 20px 25px; border-bottom: 1px solid rgba(255,255,255,0.08);
     display: flex; justify-content: space-between; align-items: center;
+    /* УЛУЧШЕННЫЙ ЗАГОЛОВОК */
+    text-shadow: 0 0 10px rgba(0, 242, 255, 0.5);
 }
-.drawer-head h3 { margin: 0; font-family: 'Orbitron'; font-size: 16px; color: #fff; letter-spacing: 2px; }
+.drawer-head h3 { margin: 0; font-family: 'Orbitron'; font-size: 18px; color: #fff; letter-spacing: 2px; }
 .close-icon { background: none; border: none; color: #aaa; font-size: 28px; cursor: pointer; }
 
 .drawer-content { overflow-y: auto; flex: 1; padding: 15px; }
 
+/* AI OVERLAY */
 .ai-modal-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.85);
     z-index: 200; display: flex; justify-content: center; align-items: center;
