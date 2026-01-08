@@ -12,7 +12,7 @@ const logger = {
         const logLed = document.getElementById('system-log');
         if (logLed) {
             logLed.textContent = msg;
-            logLed.style.color = type === 'error' ? '#ff3333' : '#00f2ff';
+            logLed.style.color = type === 'error' ? '#f00' : '#444';
         }
     }
 };
@@ -66,33 +66,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const startBtn = document.getElementById('btn-start-system');
     const startOverlay = document.getElementById('start-overlay');
     
-    // === FIX STARTUP ===
+    // === FIX: ONE-TOUCH LAUNCH ===
     if (startBtn) {
-        startBtn.onclick = async () => {
-            // 1. МГНОВЕННАЯ РАЗБЛОКИРОВКА АУДИО (Синхронно в клике)
-            const audio = Player.getAudioElement();
-            
-            // Скрываем оверлей сразу, чтобы интерфейс "отреагировал"
+        // Используем onclick для гарантированного user gesture
+        startBtn.onclick = () => {
+            // 1. МГНОВЕННО УБИРАЕМ ОВЕРЛЕЙ
             if (startOverlay) {
-                startOverlay.style.opacity = '0';
-                setTimeout(() => startOverlay.remove(), 500);
+                startOverlay.style.display = 'none'; // Жестко скрываем
             }
 
-            // Пытаемся запустить пустой звук, чтобы браузер дал права
-            try {
-                // Это ключевой момент: play() должен быть вызван прямо здесь
-                await audio.play().then(() => {
-                    // Если плейлиста еще нет, ставим на паузу, но контекст уже "жив"
-                    audio.pause();
-                }).catch(err => console.log("Silent start:", err));
-                
-                // Инициализируем визуализатор (он тоже требует user gesture)
-                await Visualizer.initialize(audio);
-            } catch (e) {
-                console.error("Audio Unlock Error:", e);
-            }
+            // 2. МГНОВЕННО "ПИНАЕМ" АУДИО
+            const audio = Player.getAudioElement();
+            // Ставим пустой src, если его нет, чтобы браузер "зацепился"
+            if (!audio.src) audio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+            
+            audio.play().then(() => {
+                audio.pause();
+                // Аудио разблокировано!
+            }).catch(e => console.log("Audio unlock:", e));
 
-            // 2. Теперь спокойно грузим данные (сеть может тупить, но аудио уже готово)
+            // 3. Запускаем визуализатор
+            Visualizer.initialize(audio).catch(() => {});
+
+            // 4. И только теперь запускаем поиск музыки
             window.loadGenreHandler('top 50 global hits');
         };
     }
@@ -106,7 +102,6 @@ document.addEventListener('DOMContentLoaded', () => {
             store.playlist = playlist;
             
             if (playlist && playlist.length > 0) { 
-                // Теперь playTrack сработает, так как контекст уже разблокирован
                 Player.playTrack(0); 
             } else { 
                 toggleLoader(false);
