@@ -5,7 +5,7 @@ import os
 import json
 import g4f
 
-from main import app, get_settings
+from main import app, get_settings, BACKUP_INTROS
 from models import TrackInfo
 
 # Фикстура для FastAPI TestClient
@@ -32,30 +32,27 @@ def mock_downloader():
         query = kwargs.get("query", "")
         if "Awesome Band - Great Song" in query:
             return [TrackInfo(identifier="vid1", title="Great Song", artist="Awesome Band", duration=180)]
+        if "fallback_prompt" in query:
+             return [TrackInfo(identifier="vid_fallback", title="Fallback Song", artist="Fallback Artist", duration=120)]
         return []
     downloader.search.side_effect = search_side_effect
     return downloader
 
-# --- ТЕСТЫ ДЛЯ G4F LEGACY (v0.3.x) С ПРОВАЙДЕРАМИ ---
+# --- ТЕСТЫ ДЛЯ G4F С BACKUP_INTROS ---
 
 @patch('g4f.ChatCompletion.create_async')
 @pytest.mark.asyncio
-async def test_ai_dj_provider_fallback_success(mock_create_async, client, mock_downloader):
+async def test_ai_dj_g4f_success(mock_create_async, client, mock_downloader):
     """
-    Тест: первый провайдер g4f падает, второй отвечает успешно.
+    Тест: успешный ответ от g4f.
     """
     # 1. Настройка моков
     app.state.downloader = mock_downloader
-    
     ai_response_data = {
-        "intro": "Второй провайдер на связи!",
+        "intro": "Провайдер на связи!",
         "tracks": ["Awesome Band - Great Song"]
     }
-    # Имитируем падение первого вызова и успешный второй
-    mock_create_async.side_effect = [
-        Exception("Provider 1 failed"),
-        json.dumps(ai_response_data)
-    ]
+    mock_create_async.return_value = json.dumps(ai_response_data)
 
     # 2. Выполнение запроса
     response = client.get("/api/ai/dj?prompt=test prompt")
@@ -63,41 +60,30 @@ async def test_ai_dj_provider_fallback_success(mock_create_async, client, mock_d
     # 3. Проверки
     assert response.status_code == 200
     data = response.json()
-    
-    # Проверяем, что были вызваны 2 провайдера
-    assert mock_create_async.call_count == 2
-    
-    # Проверяем, что интро от второго, успешного провайдера
-    assert data["dj_intro"] == "Второй провайдер на связи!"
+    assert data["dj_intro"] == "Провайдер на связи!"
     assert len(data["playlist"]) == 1
-    assert data["playlist"][0]["artist"] == "Awesome Band"
-    
-    # Проверяем, что downloader был вызван для трека из ответа AI
     mock_downloader.search.assert_called_once_with(query="Awesome Band - Great Song", limit=1)
 
 @patch('g4f.ChatCompletion.create_async')
 @pytest.mark.asyncio
-async def test_ai_dj_all_providers_fail(mock_create_async, client, mock_downloader):
+async def test_ai_dj_g4f_fails_uses_backup_intro(mock_create_async, client, mock_downloader):
     """
-    Тест: все провайдеры g4f падают.
-    Система должна вернуть стандартный ответ об ошибке.
+    Тест: g4f не отвечает, система должна использовать случайное интро из BACKUP_INTROS.
     """
     # 1. Настройка моков
     app.state.downloader = mock_downloader
-    # Все вызовы будут возвращать ошибку
-    mock_create_async.side_effect = Exception("Provider failed")
+    mock_create_async.return_value = "" # Имитируем пустой ответ от AI
 
     # 2. Выполнение запроса
-    response = client.get("/api/ai/dj?prompt=some_prompt")
+    response = client.get("/api/ai/dj?prompt=fallback_prompt")
     
     # 3. Проверки
-    from main import PROVIDERS # импортируем, чтобы знать, сколько раз должен быть вызов
-    assert mock_create_async.call_count == len(PROVIDERS)
-    
+    assert response.status_code == 200
     data = response.json()
-    # Проверяем, что вернулся жестко заданный в коде JSON-ответ об ошибке
-    assert data["intro"] == "Связь нестабильна. Включаю музыку."
-    assert len(data["playlist"]) == 0
     
-    # Убедимся, что после этого основной поиск не был вызван, т.к. AI вернул пустой плейлист
-    mock_downloader.search.assert_not_called()
+    # Проверяем, что интро - одна из резервных фраз
+    assert data["dj_intro"] in BACKUP_INTROS
+    # Проверяем, что в плейлист попал исходный промпт
+    assert len(data["playlist"]) == 1
+    assert data["playlist"][0]["title"] == "Fallback Song"
+    mock_downloader.search.assert_called_once_with(query="fallback_prompt", limit=1)

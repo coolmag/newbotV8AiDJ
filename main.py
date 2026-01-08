@@ -6,17 +6,30 @@ from datetime import timedelta
 import os
 import json
 import re
+import random
 
-# --- G4F STABLE CORE ---
+# --- G4F STABLE ---
 import g4f
 
-# Актуальный список провайдеров на 2026 (g4f 0.3.x)
 PROVIDERS = [
     g4f.Provider.GeekGpt,
     g4f.Provider.Liaobots,
-    g4f.Provider.Chatgpt4o,  # Исправлено имя!
-    g4f.Provider.Blackbox,   # Добавил Blackbox (очень стабильный)
-    g4f.Provider.FreeGpt,
+    g4f.Provider.Chatgpt4o,
+    g4f.Provider.Blackbox,
+]
+
+# Запасные фразы, чтобы ИИ всегда "говорил"
+BACKUP_INTROS = [
+    "В эфире Аврора. Лови волну.",
+    "Специально для тебя — лучший саунд.",
+    "Запускаю музыкальный поток.",
+    "Система готова. Поехали.",
+    "Только хиты, только хардкор.",
+    "Настраиваюсь на твою частоту.",
+    "Отличный выбор. Слушаем.",
+    "Музыка для души и тела.",
+    "Аврора на связи. Включаю.",
+    "Заряжаю позитивом.",
 ]
 
 async def get_ai_response(prompt: str) -> str:
@@ -26,16 +39,11 @@ async def get_ai_response(prompt: str) -> str:
                 model=g4f.models.gpt_35_turbo,
                 messages=[{"role": "user", "content": prompt}],
                 provider=provider,
-                timeout=20,
+                timeout=15, # Чуть меньше таймаут
             )
-            # Проверка на пустой ответ
-            if not response: continue
-            return str(response)
-        except:
-            continue
-            
-    # Резервный ответ
-    return '{"intro": "Связь с космосом прервана. Включаю музыку.", "tracks": []}'
+            if response: return str(response)
+        except: continue
+    return "" # Возвращаем пустоту, чтобы сработал fallback
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -103,7 +111,6 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
-    fallback_intro = "Принято. Включаю музыку."
     logger.info(f"[AI] Request: {prompt}")
     
     system_instruction = "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"
@@ -112,18 +119,19 @@ async def ai_dj_generate(prompt: str, request: Request):
     try:
         raw_response = await get_ai_response(full_prompt)
         
-        # Чистка JSON
         json_match = re.search(r'{{.*}}', raw_response, re.DOTALL)
         if json_match:
             data = json.loads(json_match.group())
         else:
-            # Если провайдер вернул текст, а не JSON
-            # Пытаемся извлечь треки, если они разделены новой строкой
-            lines = [l.strip() for l in raw_response.split('\n') if l.strip() and '-' in l]
-            if lines:
-                data = {"intro": "Готово.", "tracks": lines[:5]}
-            else:
-                data = {"intro": "Готово.", "tracks": [prompt]}
+            # Если ИИ не ответил JSON-ом или молчит -> берем случайную фразу
+            data = {
+                "intro": random.choice(BACKUP_INTROS), 
+                "tracks": [prompt]
+            }
+
+        # Если интро пустое, тоже заполняем
+        if not data.get("intro"):
+            data["intro"] = random.choice(BACKUP_INTROS)
 
         downloader = request.app.state.downloader
         final_playlist = []
@@ -138,13 +146,13 @@ async def ai_dj_generate(prompt: str, request: Request):
         if not final_playlist:
              final_playlist = await downloader.search(query=prompt, limit=10)
 
-        return {"dj_intro": data.get("intro", fallback_intro), "playlist": final_playlist}
+        return {"dj_intro": data["intro"], "playlist": final_playlist}
 
     except Exception as e:
         logger.error(f"[AI Error] {e}")
         downloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
-        return {"dj_intro": "Сбой нейросети.", "playlist": tracks}
+        return {"dj_intro": random.choice(BACKUP_INTROS), "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
