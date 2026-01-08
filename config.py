@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # --- Logging ---
     LOG_LEVEL: str = "INFO"
     
-    # --- Scaling & Limits (ВОТ ЧЕГО НЕ ХВАТАЛО) ---
+    # --- Scaling & Limits ---
     MAX_CONCURRENT_DOWNLOADS: int = 3
     DOWNLOAD_TIMEOUT: int = 45
     
@@ -42,6 +42,6 @@ class Settings(BaseSettings):
     def _assemble_admin_ids(cls, v, info) -> List[int]:
         return []
 
- @lru_cache()
+@lru_cache()
 def get_settings() -> Settings:
     return Settings()

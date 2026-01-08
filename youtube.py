@@ -30,6 +30,8 @@ class YouTubeDownloader:
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         self._ytmusic = YTMusic()
+        
+        # Scaling Protection
         self.semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_DOWNLOADS)
         self.search_semaphore = asyncio.Semaphore(5)
         self._download_locks: Dict[str, asyncio.Lock] = {}
@@ -51,7 +53,8 @@ class YouTubeDownloader:
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
 
     def _get_file_lock(self, video_id: str) -> asyncio.Lock:
-        if video_id not in self._download_locks: self._download_locks[video_id] = asyncio.Lock()
+        if video_id not in self._download_locks:
+            self._download_locks[video_id] = asyncio.Lock()
         return self._download_locks[video_id]
 
     def _is_track_valid(self, entry: Dict, strict: bool = True) -> bool:
@@ -67,8 +70,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            # Кэш теперь зависит только от запроса, но мы будем менять запрос в radio.py
-            cache_key = f"yt_search_v16:{clean_query}" 
+            cache_key = f"yt_search_v17:{clean_query}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
@@ -100,7 +102,6 @@ class YouTubeDownloader:
                     seen.add(t.identifier)
 
             final = unique[:limit]
-            # Кэшируем только на 30 минут (1800 сек), чтобы чаще обновлять
             if final: await self._cache.set(cache_key, final, ttl=1800)
             return final
 
