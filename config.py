@@ -18,8 +18,9 @@ class Settings(BaseSettings):
     COOKIES_CONTENT: str = ""
     PROXY_URL: Optional[str] = None
     
+    # --- Явное объявление полей ---
     ADMIN_ID_LIST: List[int] = []
-
+    
     BASE_DIR: Path = Path(__file__).resolve().parent
     DOWNLOADS_DIR: Path = BASE_DIR / "downloads"
     TEMP_AUDIO_DIR: Path = BASE_DIR / "temp_audio"
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
     
     LOG_LEVEL: str = "INFO"
     
+    # --- Настройки нагрузки ---
     MAX_CONCURRENT_DOWNLOADS: int = 3
     DOWNLOAD_TIMEOUT: int = 45
     CLEANUP_INTERVAL_SECONDS: int = 600  
