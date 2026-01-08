@@ -42,17 +42,51 @@ class YouTubeDownloader:
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
 
+        # --- ULTIMATE YOUTUBE BYPASS CONFIG (JAN 2026) ---
         self.ydl_opts = {
-            "quiet": True, "no_warnings": True, "noplaylist": True,
-            "format": "bestaudio/best", 
+            "format": "bestaudio/best",
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
             "logger": SilentLogger(),
-            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            'nocheckcertificate': True, 
-            'socket_timeout': 30, 
-            'retries': 5,
-            # --- CRITICAL FIX FROM USER ---
-            "extractor_args": {"youtubetab": {"skip": ["webp", "initial_data"]}},
+            
+            # Сетевые настройки
+            "source_address": "0.0.0.0",
+            "retries": 15,
+            "fragment_retries": 15,
+            "socket_timeout": 30,
+            
+            # Имитация человека (Slow down to avoid bans)
+            "sleep_interval": 2, 
+            "max_sleep_interval": 10,
+
+            # Заголовки (Magic Headers)
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-User": "?1",
+                "Sec-Fetch-Dest": "document",
+                "Upgrade-Insecure-Requests": "1",
+            },
+            
+            # Аргументы экстрактора (Bypass anti-bot)
+            "extractor_args": {
+                "youtubetab": {
+                    "skip": ["webp", "initial_data", "comments"]
+                },
+                "youtube": {
+                    "player_client": ["web", "android"],
+                    "player_skip": ["configs", "webview"]
+                }
+            },
+            
+            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+            'nocheckcertificate': True,
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
 
@@ -73,7 +107,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v19:{clean_query}"
+            cache_key = f"yt_search_v21:{clean_query}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
@@ -149,10 +183,19 @@ class YouTubeDownloader:
                         with yt_dlp.YoutubeDL(self.ydl_opts) as ydl: ydl.download([video_id])
                         return True
                     except Exception as e: 
-                        logger.error(f"DL error {video_id}: {e}")
+                        logger.warning(f"Skipping {video_id}: {e}") # Warning вместо Error
                         return False
                 
-                if await asyncio.get_running_loop().run_in_executor(None, do_dl):
+                # Добавил таймаут на загрузку, чтобы не висел вечно
+                try:
+                    success = await asyncio.wait_for(
+                        asyncio.get_running_loop().run_in_executor(None, do_dl), 
+                        timeout=60
+                    )
+                except asyncio.TimeoutError:
+                    success = False
+                
+                if success:
                     final_path = await self.wait_for_download_completion(video_id)
                     if final_path: return DownloadResult(success=True, file_path=final_path, track_info=info)
                 
