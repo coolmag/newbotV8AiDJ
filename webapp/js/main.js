@@ -32,7 +32,7 @@ function toggleLoader(show, text = "LOADING...") {
 document.addEventListener('DOMContentLoaded', () => {
     logger.init();
     
-    // Telegram WebApp Init
+    // Telegram Init
     try {
         const tg = window.Telegram?.WebApp;
         if (tg) { 
@@ -44,10 +44,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     } catch (e) {}
 
-    // Status Callback
     Player.setStatusCallback((state, message) => {
         if (state === 'playing') toggleLoader(false);
-        
         logger.print(message, state === 'error' ? 'error' : 'info');
         
         const tArtist = document.getElementById('track-artist');
@@ -68,44 +66,35 @@ document.addEventListener('DOMContentLoaded', () => {
     const startBtn = document.getElementById('btn-start-system');
     const startOverlay = document.getElementById('start-overlay');
     
-    // --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗАПУСКА ---
-    const handleStart = async () => {
-        const audio = Player.getAudioElement();
-        
-        // 1. Сразу скрываем оверлей, чтобы дать фидбек пользователю
-        if (startOverlay) { 
-            startOverlay.style.opacity = '0'; 
-            setTimeout(() => startOverlay.remove(), 500); 
-        }
-
-        // 2. ЖЕСТКАЯ разблокировка аудио-контекста
-        try {
-            // Создаем контекст визуализатора (он же основной аудио контекст)
-            await Visualizer.initialize(audio);
-            
-            // Если аудио на паузе (а оно на паузе), пытаемся проиграть тишину
-            // Это "пинает" движок браузера
-            if (audio.paused) {
-                audio.play().then(() => {
-                    // Если плейлиста нет, ставим на паузу и сбрасываем время
-                    if (store.playlist.length === 0) {
-                        audio.pause();
-                        audio.currentTime = 0;
-                    }
-                }).catch(err => console.log("Audio kickstart:", err));
-            }
-        } catch (e) {
-            console.error("Audio Context Unlock Failed:", e);
-        }
-        
-        // 3. Загружаем стартовый контент
-        window.loadGenreHandler('top 50 global hits');
-    };
-    
+    // === FIX STARTUP ===
     if (startBtn) {
-        // Используем 'click' как самое надежное событие. 
-        // Убрали touchstart и preventDefault, так как они могут блокировать AudioContext.
-        startBtn.onclick = handleStart;
+        startBtn.onclick = async () => {
+            // 1. МГНОВЕННАЯ РАЗБЛОКИРОВКА АУДИО (Синхронно в клике)
+            const audio = Player.getAudioElement();
+            
+            // Скрываем оверлей сразу, чтобы интерфейс "отреагировал"
+            if (startOverlay) {
+                startOverlay.style.opacity = '0';
+                setTimeout(() => startOverlay.remove(), 500);
+            }
+
+            // Пытаемся запустить пустой звук, чтобы браузер дал права
+            try {
+                // Это ключевой момент: play() должен быть вызван прямо здесь
+                await audio.play().then(() => {
+                    // Если плейлиста еще нет, ставим на паузу, но контекст уже "жив"
+                    audio.pause();
+                }).catch(err => console.log("Silent start:", err));
+                
+                // Инициализируем визуализатор (он тоже требует user gesture)
+                await Visualizer.initialize(audio);
+            } catch (e) {
+                console.error("Audio Unlock Error:", e);
+            }
+
+            // 2. Теперь спокойно грузим данные (сеть может тупить, но аудио уже готово)
+            window.loadGenreHandler('top 50 global hits');
+        };
     }
 
     window.loadGenreHandler = async (query) => {
@@ -117,11 +106,8 @@ document.addEventListener('DOMContentLoaded', () => {
             store.playlist = playlist;
             
             if (playlist && playlist.length > 0) { 
-                // Небольшая задержка перед стартом, чтобы UI прогрузился
-                setTimeout(() => {
-                    Player.playTrack(0);
-                    toggleLoader(false);
-                }, 100);
+                // Теперь playTrack сработает, так как контекст уже разблокирован
+                Player.playTrack(0); 
             } else { 
                 toggleLoader(false);
                 logger.print('NO TAPE FOUND', 'error'); 
