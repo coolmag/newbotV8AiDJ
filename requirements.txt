@@ -9,5 +9,6 @@ httpx==0.27.0
 psutil==5.9.8
 nest-asyncio==1.6.0
 ytmusicapi==1.5.3
-# НОВЫЙ СТАНДАРТ GOOGLE
-google-genai
+# БЕСПЛАТНЫЙ ИИ БЕЗ КЛЮЧЕЙ
+g4f==6.8.3
+curl_cffi==0.14.0

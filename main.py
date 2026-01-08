@@ -3,17 +3,17 @@ import asyncio
 from contextlib import asynccontextmanager
 import time
 from datetime import timedelta
-from typing import List
 import os
 import json
 import re
 
+# --- G4F AI (FREE) ---
 HAS_AI_LIB = False
 try:
-    from google import genai
+    import g4f
     HAS_AI_LIB = True
 except ImportError:
-    print("⚠️ Google GenAI lib not found. AI features disabled.")
+    print("⚠️ g4f lib not found. AI disabled.")
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, JSONResponse, FileResponse
@@ -30,8 +30,6 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from models import TrackInfo
 
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-
 logger = logging.getLogger(__name__)
 _start_time = time.time()
 
@@ -39,6 +37,7 @@ def get_uptime(): return str(timedelta(seconds=int(time.time() - _start_time)))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # НАДЕЖНАЯ ВЕРСИЯ LIFESPAN
     setup_logging()
     logger.info("⚡ Application starting up...")
     
@@ -83,70 +82,50 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
-    fallback_intro = "Принято. Включаю музыку."
+    # НОВАЯ ЛОГИКА С G4F
+    fallback_intro = "Принято. Включаю."
     
-    if not HAS_AI_LIB or not GEMINI_KEY:
-        downloader: YouTubeDownloader = request.app.state.downloader
+    if not HAS_AI_LIB:
+        downloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt + " music", limit=10)
         return {"dj_intro": fallback_intro, "playlist": tracks}
 
-    logger.info(f"[AI] Generating for: {prompt}")
+    logger.info(f"[AI] Request to g4f: {prompt}")
     
-    system_instruction = """
-    Ты — DJ Aurora.
-    1. Подбери 5 треков.
-    2. Придумай интро (1 фраза).
-    JSON: {"intro": "...", "tracks": ["Artist - Title"]}
-    """
-
     try:
-        client = genai.Client(api_key=GEMINI_KEY)
+        def ask_gpt():
+            return g4f.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"},
+                    {"role": "user", "content": f"Запрос: {prompt}"}
+                ]
+            )
         
-        # MODEL FALLBACK CHAIN
-        # Пытаемся использовать модели от новой к старой
-        models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
-        response = None
-        used_model = ""
+        raw_response = await asyncio.get_running_loop().run_in_executor(None, ask_gpt)
         
-        for model_name in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=f"{system_instruction}\n\nQuery: {prompt}"
-                )
-                used_model = model_name
-                break # Успех!
-            except Exception as e:
-                logger.warning(f"Model {model_name} failed: {e}")
-                continue
-        
-        if not response:
-            raise Exception("All AI models failed.")
+        json_str = re.search(r'\{.*\}', raw_response, re.DOTALL)
+        if json_str:
+            data = json.loads(json_str.group())
+        else:
+            data = {"intro": "Готово.", "tracks": [prompt]}
 
-        logger.info(f"[AI] Success using model: {used_model}")
-        
-        clean_text = re.sub(r"```json|```", "", response.text).strip()
-        data = json.loads(clean_text)
-        
-        tracks_query = data.get("tracks", [])
-        intro = data.get("intro", fallback_intro)
-        
-        downloader: YouTubeDownloader = request.app.state.downloader
+        downloader = request.app.state.downloader
         final_playlist = []
-        for track_name in tracks_query:
-            found = await downloader.search(query=track_name, limit=1)
+        for t in data.get("tracks", []):
+            found = await downloader.search(query=t, limit=1)
             if found: final_playlist.extend(found)
-        
+            
         if not final_playlist:
              final_playlist = await downloader.search(query=prompt, limit=10)
 
-        return {"dj_intro": intro, "playlist": final_playlist}
+        return {"dj_intro": data.get("intro", fallback_intro), "playlist": final_playlist}
 
     except Exception as e:
-        logger.error(f"[AI Critical Error] {e}")
-        downloader: YouTubeDownloader = request.app.state.downloader
+        logger.error(f"[AI Error] {e}")
+        downloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
-        return {"dj_intro": "Сбой нейросети.", "playlist": tracks}
+        return {"dj_intro": "Сбой. Резервный канал.", "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
