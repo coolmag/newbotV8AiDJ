@@ -49,11 +49,22 @@ def get_uptime(): return str(timedelta(seconds=int(time.time() - _start_time)))
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Application starting up...")
+    
+    # Инициализация настроек
     settings: Settings = get_settings()
+    
+    # Проверка критических настроек
+    if not hasattr(settings, 'MAX_CONCURRENT_DOWNLOADS'):
+        logger.error("CRITICAL: Old config file detected. Please update config.py!")
+        # Fallback чтобы сервер не упал, если конфиг старый
+        settings.MAX_CONCURRENT_DOWNLOADS = 3
+    
     settings.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
     settings.TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    
     cache = CacheService(settings.CACHE_DB_PATH)
     await cache.initialize()
+    
     downloader = YouTubeDownloader(settings, cache)
     app.state.downloader = downloader
     
@@ -67,10 +78,13 @@ async def lifespan(app: FastAPI):
     await tg_app.initialize()
     await tg_app.start()
     await tg_app.bot.set_webhook(url=settings.WEBHOOK_URL)
+    
     app.state.tg_app = tg_app
     app.state.radio_manager = radio_manager
     app.state.cache = cache
+    
     yield
+    
     await radio_manager.stop_all()
     await tg_app.stop()
     await tg_app.shutdown()
@@ -81,27 +95,24 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
-    # FALLBACK INTRO (чтобы голос работал всегда)
-    fallback_intro = "Принято. Запускаю подборку."
-    
+    fallback_intro = "Принято. Включаю музыку."
     if not HAS_AI_LIB or not GEMINI_KEY:
         downloader: YouTubeDownloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt + " music", limit=10)
         return {"dj_intro": fallback_intro, "playlist": tracks}
 
     logger.info(f"[AI] Generating for: {prompt}")
+    
     system_instruction = """
     Ты — DJ Aurora.
     1. Подбери 5 треков.
-    2. Придумай ОЧЕНЬ короткое интро (1 фраза на русском).
+    2. Придумай интро (1 фраза).
     JSON: {"intro": "...", "tracks": ["Artist - Title"]}
     """
 
     try:
-        # Используем 1.5 Flash (самая надежная сейчас)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(f"{system_instruction}\n\nQuery: {prompt}")
-        
         clean_text = re.sub(r"```json|```", "", response.text).strip()
         data = json.loads(clean_text)
         
@@ -123,7 +134,7 @@ async def ai_dj_generate(prompt: str, request: Request):
         logger.error(f"[AI Error] {e}")
         downloader: YouTubeDownloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
-        return {"dj_intro": fallback_intro, "playlist": tracks}
+        return {"dj_intro": "Сбой нейросети.", "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
