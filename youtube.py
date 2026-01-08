@@ -42,48 +42,42 @@ class YouTubeDownloader:
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
 
-        # --- COMMUNITY STANDARD CONFIG (JAN 2026) ---
+        # --- SINGLE TRUTH CONFIG (JAN 2026) ---
         self.ydl_opts = {
-            # Берем лучшее видео (до 720p) + аудио, либо просто лучшее.
-            # Это обходит бан "audio-only" запросов.
-            "format": "(bestvideo[height<=720]+bestaudio/best[height<=720])/bestaudio/best",
+            # ЕДИНСТВЕННЫЙ РАБОЧИЙ ФОРМАТ
+            "format": "bestaudio[abr>0]/best", 
             
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "logger": SilentLogger(),
             
-            "retries": 20,
-            "fragment_retries": 20,
-            
-            # Принудительная конвертация в MP3
-            "postprocessors": [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            "restrictfilenames": True,
             
-            # MAGIC HEADERS
+            "retries": 10,
+            "fragment_retries": 20,
+            "socket_timeout": 30,
+            
+            # ЗАГОЛОВКИ (ОБЯЗАТЕЛЬНО)
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0"
             },
             
             # BYPASS ARGS
             "extractor_args": {
-                "youtubetab": {
-                    "skip": ["webp", "initial_data", "comments"]
-                },
                 "youtube": {
-                    "player_client": ["web", "android", "ios"],
-                    "player_skip": ["configs", "webview", "js"]
+                    "player_client": ["android", "web"],
+                    "player_skip": ["configs", "webview"]
                 }
             },
             
+            # Конвертация (чтобы наверняка был MP3)
+            "postprocessors": [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
             'nocheckcertificate': True,
-            'socket_timeout': 30,
         }
         
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
@@ -105,7 +99,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v24:{clean_query}"
+            cache_key = f"yt_search_v25:{clean_query}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
@@ -187,7 +181,7 @@ class YouTubeDownloader:
                 try:
                     success = await asyncio.wait_for(
                         asyncio.get_running_loop().run_in_executor(None, do_dl), 
-                        timeout=120 # Увеличил таймаут для видео
+                        timeout=120
                     )
                 except asyncio.TimeoutError:
                     success = False
