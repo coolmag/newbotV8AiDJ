@@ -3,10 +3,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock, MagicMock
 import os
 import json
-
-# Убираем зависимость от ключа Google, если он был
-if "GEMINI_API_KEY" in os.environ:
-    del os.environ["GEMINI_API_KEY"]
+import g4f
 
 from main import app, get_settings
 from models import TrackInfo
@@ -14,7 +11,6 @@ from models import TrackInfo
 # Фикстура для FastAPI TestClient
 @pytest.fixture
 def client():
-    # Мокаем настройки, чтобы не зависеть от .env файла
     app.dependency_overrides[get_settings] = lambda: MagicMock(
         BOT_TOKEN="test_token",
         WEBHOOK_URL="test_url",
@@ -22,7 +18,7 @@ def client():
         TEMP_AUDIO_DIR="test_temp",
         CACHE_DB_PATH="test_cache.db",
         PROXY_URL=None,
-        MAX_CONCURRENT_DOWNLOADS=3 # Добавим недостающие атрибуты
+        MAX_CONCURRENT_DOWNLOADS=3
     )
     with TestClient(app) as c:
         yield c
@@ -34,74 +30,74 @@ def mock_downloader():
     downloader = AsyncMock()
     async def search_side_effect(*args, **kwargs):
         query = kwargs.get("query", "")
-        if "Epic Rock - Victory" in query:
-            return [TrackInfo(identifier="vid1", title="Victory", artist="Epic Rock", duration=180)]
-        if "fallback_query" in query:
-            return [TrackInfo(identifier="vid_fallback", title="Fallback Song", artist="Fallback Artist", duration=120)]
+        if "Awesome Band - Great Song" in query:
+            return [TrackInfo(identifier="vid1", title="Great Song", artist="Awesome Band", duration=180)]
         return []
     downloader.search.side_effect = search_side_effect
     return downloader
 
-# --- ТЕСТЫ ДЛЯ G4F СО СТРОКОВЫМИ МОДЕЛЯМИ ---
+# --- ТЕСТЫ ДЛЯ G4F LEGACY (v0.3.x) С ПРОВАЙДЕРАМИ ---
 
-@patch('main.sync_ask_ai')
+@patch('g4f.ChatCompletion.create_async')
 @pytest.mark.asyncio
-async def test_ai_dj_g4f_success(mock_sync_ask_ai, client, mock_downloader):
+async def test_ai_dj_provider_fallback_success(mock_create_async, client, mock_downloader):
     """
-    Тест: успешный ответ от sync_ask_ai.
-    Проверяет, что основная логика работает, JSON парсится, и треки ищутся.
+    Тест: первый провайдер g4f падает, второй отвечает успешно.
     """
     # 1. Настройка моков
     app.state.downloader = mock_downloader
     
     ai_response_data = {
-        "intro": "Врубаю эпичный рок!",
-        "tracks": ["Epic Rock - Victory"]
+        "intro": "Второй провайдер на связи!",
+        "tracks": ["Awesome Band - Great Song"]
     }
-    # Имитируем ответ от sync_ask_ai: (json_string)
-    mock_sync_ask_ai.return_value = json.dumps(ai_response_data)
+    # Имитируем падение первого вызова и успешный второй
+    mock_create_async.side_effect = [
+        Exception("Provider 1 failed"),
+        json.dumps(ai_response_data)
+    ]
 
     # 2. Выполнение запроса
-    response = client.get("/api/ai/dj?prompt=epic rock")
+    response = client.get("/api/ai/dj?prompt=test prompt")
     
     # 3. Проверки
     assert response.status_code == 200
     data = response.json()
     
-    mock_sync_ask_ai.assert_called_once_with("epic rock")
+    # Проверяем, что были вызваны 2 провайдера
+    assert mock_create_async.call_count == 2
     
-    assert data["dj_intro"] == "Врубаю эпичный рок!"
+    # Проверяем, что интро от второго, успешного провайдера
+    assert data["dj_intro"] == "Второй провайдер на связи!"
     assert len(data["playlist"]) == 1
-    assert data["playlist"][0]["title"] == "Victory"
+    assert data["playlist"][0]["artist"] == "Awesome Band"
     
-    # Проверяем, что поиск был вызван для трека из ответа AI
-    mock_downloader.search.assert_called_once_with(query="Epic Rock - Victory", limit=1)
+    # Проверяем, что downloader был вызван для трека из ответа AI
+    mock_downloader.search.assert_called_once_with(query="Awesome Band - Great Song", limit=1)
 
-@patch('main.sync_ask_ai')
+@patch('g4f.ChatCompletion.create_async')
 @pytest.mark.asyncio
-async def test_ai_dj_g4f_returns_none_fallback(mock_sync_ask_ai, client, mock_downloader):
+async def test_ai_dj_all_providers_fail(mock_create_async, client, mock_downloader):
     """
-    Тест: sync_ask_ai вернула None (все модели g4f не ответили).
-    Проверяет, что система корректно переходит к резервному поиску.
+    Тест: все провайдеры g4f падают.
+    Система должна вернуть стандартный ответ об ошибке.
     """
     # 1. Настройка моков
     app.state.downloader = mock_downloader
-    mock_sync_ask_ai.return_value = None
+    # Все вызовы будут возвращать ошибку
+    mock_create_async.side_effect = Exception("Provider failed")
 
     # 2. Выполнение запроса
-    prompt_for_fallback = "fallback_query"
-    response = client.get(f"/api/ai/dj?prompt={prompt_for_fallback}")
+    response = client.get("/api/ai/dj?prompt=some_prompt")
     
     # 3. Проверки
-    assert response.status_code == 200
+    from main import PROVIDERS # импортируем, чтобы знать, сколько раз должен быть вызов
+    assert mock_create_async.call_count == len(PROVIDERS)
+    
     data = response.json()
+    # Проверяем, что вернулся жестко заданный в коде JSON-ответ об ошибке
+    assert data["intro"] == "Связь нестабильна. Включаю музыку."
+    assert len(data["playlist"]) == 0
     
-    mock_sync_ask_ai.assert_called_once_with(prompt_for_fallback)
-    
-    # Проверяем, что используется интро для сбоя и резервный плейлист
-    assert data["dj_intro"] == "Сбой нейросети. Резервный канал."
-    assert len(data["playlist"]) == 1
-    assert data["playlist"][0]["title"] == "Fallback Song"
-
-    # Проверяем, что был вызван резервный поиск
-    mock_downloader.search.assert_called_once_with(query=prompt_for_fallback, limit=10)
+    # Убедимся, что после этого основной поиск не был вызван, т.к. AI вернул пустой плейлист
+    mock_downloader.search.assert_not_called()

@@ -7,13 +7,30 @@ import os
 import json
 import re
 
-# --- G4F AI FIX ---
-HAS_G4F = False
-try:
-    import g4f
-    HAS_G4F = True
-except ImportError:
-    print("⚠️ g4f not found.")
+# --- G4F LEGACY CORE ---
+import g4f
+
+PROVIDERS = [
+    g4f.Provider.GeekGPT,
+    g4f.Provider.Liaobots,
+    g4f.Provider.ChatgptAi,
+    g4f.Provider.ChatBase,
+    g4f.Provider.GptForLove,
+]
+
+async def get_ai_response(prompt: str) -> str:
+    for provider in PROVIDERS:
+        try:
+            response = await g4f.ChatCompletion.create_async(
+                model=g4f.models.gpt_35_turbo,
+                messages=[{"role": "user", "content": prompt}],
+                provider=provider,
+                timeout=20,
+            )
+            return str(response)
+        except:
+            continue
+    return '{"intro": "Связь нестабильна. Включаю музыку.", "tracks": []}'
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -79,37 +96,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-def sync_ask_ai(prompt: str):
-    if not HAS_G4F: return None
-    
-    models = ["gpt-4o", "gpt-4o-mini", "llama-3.1-70b", "gpt-3.5-turbo"]
-    system = "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"
-    
-    for model in models:
-        try:
-            response = g4f.ChatCompletion.create(
-                model=model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            )
-            if response and "{" in str(response):
-                return str(response)
-        except Exception as e:
-            print(f"Model {model} failed: {e}")
-            continue
-    return None
-
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     fallback_intro = "Принято. Включаю музыку."
     logger.info(f"[AI] Request: {prompt}")
     
-    try:
-        raw_response = await asyncio.get_running_loop().run_in_executor(None, sync_ask_ai, prompt)
-        
-        if not raw_response:
-            raise Exception("AI models busy")
+    system_instruction = "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"
+    full_prompt = f"{system_instruction}\n\nЗапрос: {prompt}"
 
-        json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
+    try:
+        raw_response = await get_ai_response(full_prompt)
+        
+        json_match = re.search(r'{{.*}}', raw_response, re.DOTALL)
         if json_match:
             data = json.loads(json_match.group())
         else:
@@ -117,7 +115,11 @@ async def ai_dj_generate(prompt: str, request: Request):
 
         downloader = request.app.state.downloader
         final_playlist = []
-        for t in data.get("tracks", []):
+        
+        tracks = data.get("tracks", [])
+        if not tracks: tracks = [prompt]
+
+        for t in tracks:
             found = await downloader.search(query=t, limit=1)
             if found: final_playlist.extend(found)
             
@@ -130,7 +132,7 @@ async def ai_dj_generate(prompt: str, request: Request):
         logger.error(f"[AI Error] {e}")
         downloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
-        return {"dj_intro": "Сбой нейросети. Резервный канал.", "playlist": tracks}
+        return {"dj_intro": "Сбой нейросети.", "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):

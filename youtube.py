@@ -51,8 +51,8 @@ class YouTubeDownloader:
             'nocheckcertificate': True, 
             'socket_timeout': 30, 
             'retries': 5,
-            # --- CRITICAL FIX FOR YOUTUBE ---
-            "extractor_args": {"youtubetab": {"skip": ["webp", "dash", "hls"]}},
+            # --- CRITICAL FIX FROM USER ---
+            "extractor_args": {"youtubetab": {"skip": ["webp", "initial_data"]}},
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
 
@@ -73,11 +73,11 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v18:{clean_query}"
+            cache_key = f"yt_search_v19:{clean_query}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
-            suffixes = ["", " official audio", " music"]
+            suffixes = ["", " official audio"]
             all_tracks = []
             
             for suffix in suffixes:
