@@ -198,6 +198,7 @@ class RadioSession:
         self.is_running = False
 
     async def _play_track(self, track: TrackInfo) -> bool:
+        result: Optional[DownloadResult] = None
         if not self.is_running: return False
         try:
             await self._update_status(f"⬇️ Загрузка: *{track.title}*...")
