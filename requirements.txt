@@ -10,5 +10,5 @@ nest-asyncio==1.6.0
 ytmusicapi==1.5.3
 curl_cffi==0.14.0
 # --- CRITICAL VERSIONS ---
-yt-dlp==2025.12.26
+yt-dlp==2025.12.8
 g4f==0.3.2.8
