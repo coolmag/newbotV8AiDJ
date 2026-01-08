@@ -12,7 +12,7 @@ const logger = {
         const logLed = document.getElementById('system-log');
         if (logLed) {
             logLed.textContent = msg;
-            logLed.style.color = type === 'error' ? '#f00' : '#444';
+            logLed.style.color = type === 'error' ? '#f00' : '#00f2ff';
         }
     }
 };
@@ -37,10 +37,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const tg = window.Telegram?.WebApp;
         if (tg) { 
             tg.expand(); 
-            if (tg.isVersionAtLeast && tg.isVersionAtLeast('6.1')) {
-                tg.setHeaderColor('#0a0a0f'); 
-                tg.setBackgroundColor('#0a0a0f'); 
-            }
+            tg.setHeaderColor('#0a0a0f'); 
+            tg.setBackgroundColor('#0a0a0f'); 
         }
     } catch (e) {}
 
@@ -66,29 +64,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const startBtn = document.getElementById('btn-start-system');
     const startOverlay = document.getElementById('start-overlay');
     
-    // === FIX: ONE-TOUCH LAUNCH ===
     if (startBtn) {
-        // Используем onclick для гарантированного user gesture
-        startBtn.onclick = () => {
-            // 1. МГНОВЕННО УБИРАЕМ ОВЕРЛЕЙ
-            if (startOverlay) {
-                startOverlay.style.display = 'none'; // Жестко скрываем
-            }
+        // ONE-TOUCH FIX
+        startBtn.onclick = async () => {
+            // 1. Прячем экран сразу
+            if (startOverlay) startOverlay.style.display = 'none';
 
-            // 2. МГНОВЕННО "ПИНАЕМ" АУДИО
+            // 2. Будим аудио контекст (ВАЖНО!)
             const audio = Player.getAudioElement();
-            // Ставим пустой src, если его нет, чтобы браузер "зацепился"
             if (!audio.src) audio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
             
-            audio.play().then(() => {
+            try {
+                await audio.play();
                 audio.pause();
-                // Аудио разблокировано!
-            }).catch(e => console.log("Audio unlock:", e));
+                // Инициализируем визуализатор пока ждем сеть
+                Visualizer.initialize(audio);
+            } catch (e) {
+                console.log("Audio kickstart failed:", e);
+            }
 
-            // 3. Запускаем визуализатор
-            Visualizer.initialize(audio).catch(() => {});
-
-            // 4. И только теперь запускаем поиск музыки
+            // 3. Грузим контент
             window.loadGenreHandler('top 50 global hits');
         };
     }
