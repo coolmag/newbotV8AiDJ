@@ -48,7 +48,7 @@ class YouTubeDownloader:
             # СТРАТЕГИЯ СЛИЯНИЯ:
             # Скачиваем видео и аудио отдельно, затем FFmpeg их склеивает.
             # Это обходит удаление легаси-форматов (itag 18/22).
-            "format": "(bestvideo[height<=720]+bestaudio/best[height<=720])/bestaudio/best",
+            "format": "bestaudio/best",
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             "noplaylist": True,
             "quiet": True,
