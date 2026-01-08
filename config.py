@@ -11,7 +11,6 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
     
-    # --- Mandatory Settings ---
     BOT_TOKEN: str 
     WEBHOOK_URL: str 
     BASE_URL: str = ""
@@ -19,42 +18,29 @@ class Settings(BaseSettings):
     COOKIES_CONTENT: str = ""
     PROXY_URL: Optional[str] = None
     
-    # --- Computed Fields ---
-    ADMIN_ID_LIST: List[int] = [] # Явное объявление поля!
+    ADMIN_ID_LIST: List[int] = []
 
-    # --- Paths ---
     BASE_DIR: Path = Path(__file__).resolve().parent
     DOWNLOADS_DIR: Path = BASE_DIR / "downloads"
     TEMP_AUDIO_DIR: Path = BASE_DIR / "temp_audio"
     CACHE_DB_PATH: Path = BASE_DIR / "cache.db"
     COOKIES_FILE: Path = BASE_DIR / "cookies.txt"
     
-    # --- Logging ---
     LOG_LEVEL: str = "INFO"
     
-    # --- Scaling & Limits ---
     MAX_CONCURRENT_DOWNLOADS: int = 3
     DOWNLOAD_TIMEOUT: int = 45
-    
-    # --- Cleanup ---
     CLEANUP_INTERVAL_SECONDS: int = 600  
     FILE_MAX_AGE_SECONDS: int = 1800     
 
     @field_validator("ADMIN_ID_LIST", mode="before")
     @classmethod
     def _assemble_admin_ids(cls, v: Any, info: ValidationInfo) -> List[int]:
-        if isinstance(v, list):
-            return v
-        
-        # Получаем значение ADMIN_IDS из данных
+        if isinstance(v, list): return v
         admin_ids_str = info.data.get("ADMIN_IDS", "")
-        if not admin_ids_str:
-            return []
-            
-        try:
-            return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
-        except ValueError:
-            return []
+        if not admin_ids_str: return []
+        try: return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
+        except ValueError: return []
 
 @lru_cache()
 def get_settings() -> Settings:

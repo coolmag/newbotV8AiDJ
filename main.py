@@ -8,9 +8,10 @@ import os
 import json
 import re
 
+# Импорт нового SDK
 HAS_AI_LIB = False
 try:
-    import google.generativeai as genai
+    from google import genai
     HAS_AI_LIB = True
 except ImportError:
     print("⚠️ Google GenAI lib not found. AI features disabled.")
@@ -30,15 +31,8 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from models import TrackInfo
 
+# Ключ берем из переменной окружения
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_KEY and HAS_AI_LIB:
-    try:
-        genai.configure(api_key=GEMINI_KEY)
-        logger = logging.getLogger(__name__)
-        logger.info("🧠 Gemini AI connected.")
-    except Exception as e:
-        print(f"⚠️ Gemini Config Error: {e}")
-        HAS_AI_LIB = False
 
 logger = logging.getLogger(__name__)
 _start_time = time.time()
@@ -50,7 +44,7 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Application starting up...")
     
-    # Инициализация настроек (теперь безопасная)
+    # Init Settings
     try:
         settings: Settings = get_settings()
     except Exception as e:
@@ -93,6 +87,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     fallback_intro = "Принято. Включаю музыку."
+    
     if not HAS_AI_LIB or not GEMINI_KEY:
         downloader: YouTubeDownloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt + " music", limit=10)
@@ -108,8 +103,15 @@ async def ai_dj_generate(prompt: str, request: Request):
     """
 
     try:
-        model = genai.GenerativeModel('gemini-pro')
-        response = model.generate_content(f"{system_instruction}\n\nQuery: {prompt}")
+        # НОВЫЙ СИНТАКСИС (google-genai)
+        client = genai.Client(api_key=GEMINI_KEY)
+        
+        # Используем новейшую модель
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=f"{system_instruction}\n\nQuery: {prompt}"
+        )
+        
         clean_text = re.sub(r"```json|```", "", response.text).strip()
         data = json.loads(clean_text)
         
