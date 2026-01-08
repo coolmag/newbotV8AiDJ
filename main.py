@@ -76,8 +76,17 @@ async def lifespan(app: FastAPI):
         logger.critical(f"FATAL CONFIG ERROR: {e}")
         raise e
     
-    settings.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    settings.TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    # CLEANUP ON START
+    import shutil
+    if os.path.exists(settings.DOWNLOADS_DIR):
+        try:
+            shutil.rmtree(settings.DOWNLOADS_DIR)
+            logger.info("🧹 Downloads cleared.")
+        except Exception as e:
+            logger.error(f"Failed to clear downloads: {e}")
+    
+    os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
+    os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
     
     cache = CacheService(settings.CACHE_DB_PATH)
     await cache.initialize()
