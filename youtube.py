@@ -17,7 +17,6 @@ class SilentLogger:
     def debug(self, msg: str): pass
     def warning(self, msg: str): pass
     def error(self, msg: str): 
-        # Фильтруем спам ошибок, чтобы не пугать, если ретрай сработает
         if "Did not get any data blocks" not in msg:
             logger.error(f"[yt-dlp] {msg}")
 
@@ -38,10 +37,10 @@ class YouTubeDownloader:
             with open(self.cookie_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
 
-        # --- SURGICAL FIX 2026 ---
+        # --- FAIL-SAFE CONFIG ---
         self.ydl_opts = {
-            # Приоритет m4a (он родной для YouTube), потом любой
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            # Приоритет любого формата, который отдадут
+            "format": "best/bestaudio",
             
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             "noplaylist": True,
@@ -49,38 +48,31 @@ class YouTubeDownloader:
             "no_warnings": True,
             "logger": SilentLogger(),
             
-            # СЕТЕВАЯ ХИРУРГИЯ
+            # Конвертация в MP3 (FFmpeg вытянет звук из видео, если надо)
+            "postprocessors": [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '128',
+            }],
+            
             "socket_timeout": 30,
-            "retries": 20,              # Долбим до победного
-            "fragment_retries": 20,     # Если кусок не скачался - пробуем снова
-            "skip_unavailable_fragments": False,
+            "retries": 15,
+            "fragment_retries": 15,
+            "skip_unavailable_fragments": True,
             
-            # ВАЖНО: Размер буфера. 10Мб притворяются плеером.
-            "http_chunk_size": 10485760, 
-            
-            # Принудительный IPv4 (IPv6 у гугла часто в бане на хостингах)
-            "source_address": "0.0.0.0", 
-            
-            # Маскировка заголовков
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            
-            # Имитация мобильного приложения (самый низкий шанс бана)
+            # Маскировка под Android
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "ios"], # WEB УБРАН СПЕЦИАЛЬНО
+                    "player_client": ["android", "web"],
                     "player_skip": ["configs", "webview", "js"],
                     "skip": ["dash", "hls"]
                 }
             },
             
-            "postprocessors": [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            },
+            
             'nocheckcertificate': True,
         }
         if self.cookie_path: self.ydl_opts['cookiefile'] = self.cookie_path
@@ -92,7 +84,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean = query.lower().strip()
-            cache_key = f"search_v29:{clean}"
+            cache_key = f"s_v31:{clean}"
             if cached := await self._cache.get(cache_key): return cached
 
             def do_s():
@@ -136,10 +128,9 @@ class YouTubeDownloader:
         async with lock:
             path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
             
-            # Проверка
+            # Проверка существующего файла
             if path.exists() and path.stat().st_size > 5000:
-                # Проверяем, не битый ли файл (нет .part)
-                if not glob.glob(str(path) + ".*"):
+                if not glob.glob(str(path) + ".*"): # Убедимся, что нет временных файлов
                     info = await self.get_track_info(video_id)
                     return DownloadResult(success=True, file_path=path, track_info=info)
 
@@ -150,21 +141,13 @@ class YouTubeDownloader:
                             ydl.download([video_id])
                         return True
                     except Exception as e:
-                        logger.warning(f"DL Attempt failed {video_id}: {e}")
+                        logger.warning(f"DL Error {video_id}: {e}")
                         return False
 
-                # Пытаемся скачать в отдельном потоке
-                success = await asyncio.get_running_loop().run_in_executor(None, try_dl)
-                
-                if success:
-                    # Ждем финализации FFmpeg
-                    start = time.time()
-                    while time.time() - start < 60:
-                        if path.exists() and path.stat().st_size > 5000:
-                            if not glob.glob(str(self._settings.DOWNLOADS_DIR / f"{video_id}.*.part")):
-                                info = await self.get_track_info(video_id)
-                                return DownloadResult(success=True, file_path=path, track_info=info)
-                        await asyncio.sleep(0.5)
+                # Запускаем и ждем
+                if await asyncio.get_running_loop().run_in_executor(None, try_dl):
+                    # Ждем финализации файла (конвертация FFmpeg может занять время после download)
+                    return await self.wait_for_download_completion(video_id)
                 
                 return DownloadResult(success=False, error_message="Failed")
 
@@ -174,3 +157,18 @@ class YouTubeDownloader:
     def _find_downloaded_file(self, video_id: str) -> Optional[Path]:
         path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         return path if path.exists() else None
+
+    # ВОССТАНОВЛЕННЫЙ МЕТОД
+    async def wait_for_download_completion(self, video_id: str, timeout: int = 60) -> Optional[DownloadResult]:
+        start = time.time()
+        path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
+        
+        while time.time() - start < timeout:
+            if path.exists() and path.stat().st_size > 5000:
+                # Проверяем отсутствие временных файлов (.part, .ytdl)
+                if not glob.glob(str(self._settings.DOWNLOADS_DIR / f"{video_id}.*part*")):
+                    info = await self.get_track_info(video_id)
+                    return DownloadResult(success=True, file_path=path, track_info=info)
+            await asyncio.sleep(0.5)
+            
+        return DownloadResult(success=False, error_message="Timeout")

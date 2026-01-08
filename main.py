@@ -165,15 +165,33 @@ async def ai_dj_generate(prompt: str, request: Request):
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
-    downloader: YouTubeDownloader = request.app.state.downloader
-    file_path = downloader._find_downloaded_file(video_id)
-    if file_path and file_path.exists():
-        return FileResponse(file_path, media_type="audio/mpeg", filename=f"{video_id}.mp3")
-    await downloader.download(video_id)
-    final_path = await downloader.wait_for_download_completion(video_id)
-    if final_path:
-        return FileResponse(final_path, media_type="audio/mpeg", filename=f"{video_id}.mp3")
-    return JSONResponse(status_code=404, content={"message": "Not found"})
+    downloader = request.app.state.downloader
+    
+    # 1. Проверяем наличие файла
+    path = downloader._find_downloaded_file(video_id)
+    
+    # 2. Если файла нет или он недокачан (.part)
+    if not path or os.path.exists(str(path) + ".part"):
+        logger.info(f"Downloading {video_id}...")
+        
+        # ВАЖНО: Метод download теперь сам ждет завершения
+        res = await downloader.download(video_id)
+        
+        if res.success and res.file_path:
+            path = res.file_path
+        else:
+            logger.error(f"Failed to stream {video_id}")
+            return JSONResponse(status_code=404, content={"error": "Download failed"})
+
+    # 3. Финальная проверка перед отдачей
+    if path and path.exists() and path.stat().st_size > 1024:
+        return FileResponse(
+            path, 
+            media_type="audio/mpeg", 
+            headers={"Accept-Ranges": "bytes"}
+        )
+    
+    return JSONResponse(status_code=404, content={"error": "File lost"})
 
 @app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}
