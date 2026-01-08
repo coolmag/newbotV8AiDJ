@@ -12,13 +12,14 @@ const logger = {
         const logLed = document.getElementById('system-log');
         if (logLed) {
             logLed.textContent = msg;
-            logLed.style.color = type === 'error' ? '#f00' : '#444';
+            logLed.style.color = type === 'error' ? '#ff3333' : '#00f2ff';
         }
     }
 };
 
 function toggleLoader(show, text = "LOADING...") {
     const loader = document.getElementById('deck-loader');
+    if (!loader) return;
     const txt = loader.querySelector('.loader-text');
     if (show) {
         if (txt) txt.textContent = text;
@@ -31,6 +32,7 @@ function toggleLoader(show, text = "LOADING...") {
 document.addEventListener('DOMContentLoaded', () => {
     logger.init();
     
+    // Telegram WebApp Init
     try {
         const tg = window.Telegram?.WebApp;
         if (tg) { 
@@ -42,14 +44,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     } catch (e) {}
 
+    // Status Callback
     Player.setStatusCallback((state, message) => {
+        if (state === 'playing') toggleLoader(false);
+        
         logger.print(message, state === 'error' ? 'error' : 'info');
+        
         const tArtist = document.getElementById('track-artist');
         if (tArtist) {
-            if (state === 'loading') { tArtist.textContent = "LOADING..."; tArtist.style.color = '#ffe600'; } 
-            else if (state === 'playing') {
+            if (state === 'loading') { 
+                tArtist.textContent = "LOADING..."; 
+                tArtist.style.color = '#ffeb3b'; 
+            } else if (state === 'playing') {
                 const track = store.playlist[store.currentTrackIndex];
-                if (track) { tArtist.textContent = track.artist; tArtist.style.color = '#333'; }
+                if (track) { 
+                    tArtist.textContent = track.artist; 
+                    tArtist.style.color = '#333'; 
+                }
             }
         }
     });
@@ -57,27 +68,44 @@ document.addEventListener('DOMContentLoaded', () => {
     const startBtn = document.getElementById('btn-start-system');
     const startOverlay = document.getElementById('start-overlay');
     
-    const handleStart = async (e) => {
-        if (e && e.cancelable) e.preventDefault();
+    // --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗАПУСКА ---
+    const handleStart = async () => {
         const audio = Player.getAudioElement();
-        try {
-            if (audio.paused) {
-                await audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(() => {});
-            }
-        } catch (e) {}
         
+        // 1. Сразу скрываем оверлей, чтобы дать фидбек пользователю
         if (startOverlay) { 
             startOverlay.style.opacity = '0'; 
             setTimeout(() => startOverlay.remove(), 500); 
         }
+
+        // 2. ЖЕСТКАЯ разблокировка аудио-контекста
+        try {
+            // Создаем контекст визуализатора (он же основной аудио контекст)
+            await Visualizer.initialize(audio);
+            
+            // Если аудио на паузе (а оно на паузе), пытаемся проиграть тишину
+            // Это "пинает" движок браузера
+            if (audio.paused) {
+                audio.play().then(() => {
+                    // Если плейлиста нет, ставим на паузу и сбрасываем время
+                    if (store.playlist.length === 0) {
+                        audio.pause();
+                        audio.currentTime = 0;
+                    }
+                }).catch(err => console.log("Audio kickstart:", err));
+            }
+        } catch (e) {
+            console.error("Audio Context Unlock Failed:", e);
+        }
         
-        try { await Visualizer.initialize(audio); } catch (e) {}
+        // 3. Загружаем стартовый контент
         window.loadGenreHandler('top 50 global hits');
     };
     
     if (startBtn) {
-        startBtn.addEventListener('click', handleStart);
-        startBtn.addEventListener('touchstart', handleStart, { passive: false });
+        // Используем 'click' как самое надежное событие. 
+        // Убрали touchstart и preventDefault, так как они могут блокировать AudioContext.
+        startBtn.onclick = handleStart;
     }
 
     window.loadGenreHandler = async (query) => {
@@ -87,11 +115,15 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const playlist = await fetchPlaylist(query);
             store.playlist = playlist;
-            toggleLoader(false);
             
             if (playlist && playlist.length > 0) { 
-                Player.playTrack(0); 
+                // Небольшая задержка перед стартом, чтобы UI прогрузился
+                setTimeout(() => {
+                    Player.playTrack(0);
+                    toggleLoader(false);
+                }, 100);
             } else { 
+                toggleLoader(false);
                 logger.print('NO TAPE FOUND', 'error'); 
             }
         } catch (err) { 
