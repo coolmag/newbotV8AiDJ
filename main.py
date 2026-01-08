@@ -50,14 +50,12 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Application starting up...")
     
-    # Инициализация настроек
-    settings: Settings = get_settings()
-    
-    # Проверка критических настроек
-    if not hasattr(settings, 'MAX_CONCURRENT_DOWNLOADS'):
-        logger.error("CRITICAL: Old config file detected. Please update config.py!")
-        # Fallback чтобы сервер не упал, если конфиг старый
-        settings.MAX_CONCURRENT_DOWNLOADS = 3
+    # Инициализация настроек (теперь безопасная)
+    try:
+        settings: Settings = get_settings()
+    except Exception as e:
+        logger.critical(f"FATAL CONFIG ERROR: {e}")
+        raise e
     
     settings.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
     settings.TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -82,7 +80,6 @@ async def lifespan(app: FastAPI):
     app.state.tg_app = tg_app
     app.state.radio_manager = radio_manager
     app.state.cache = cache
-    
     yield
     
     await radio_manager.stop_all()

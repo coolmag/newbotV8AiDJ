@@ -4,7 +4,7 @@ from functools import lru_cache
 import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import field_validator, ValidationInfo
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     COOKIES_CONTENT: str = ""
     PROXY_URL: Optional[str] = None
     
+    # --- Computed Fields ---
+    ADMIN_ID_LIST: List[int] = [] # Явное объявление поля!
+
     # --- Paths ---
     BASE_DIR: Path = Path(__file__).resolve().parent
     DOWNLOADS_DIR: Path = BASE_DIR / "downloads"
@@ -39,8 +42,19 @@ class Settings(BaseSettings):
 
     @field_validator("ADMIN_ID_LIST", mode="before")
     @classmethod
-    def _assemble_admin_ids(cls, v, info) -> List[int]:
-        return []
+    def _assemble_admin_ids(cls, v: Any, info: ValidationInfo) -> List[int]:
+        if isinstance(v, list):
+            return v
+        
+        # Получаем значение ADMIN_IDS из данных
+        admin_ids_str = info.data.get("ADMIN_IDS", "")
+        if not admin_ids_str:
+            return []
+            
+        try:
+            return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
+        except ValueError:
+            return []
 
 @lru_cache()
 def get_settings() -> Settings:
