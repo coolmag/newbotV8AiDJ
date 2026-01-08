@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock, MagicMock, call
 import os
 import json
 
@@ -26,32 +26,14 @@ def client():
 class MockGenAIResponse:
     def __init__(self, text):
         self._text = text
-
     @property
     def text(self):
         return self._text
 
-# Успешный сценарий: AI вернул JSON, и треки нашлись
-@patch('google.genai.Client')
-@pytest.mark.asyncio
-async def test_ai_dj_generate_success(mock_genai_client, client):
-    # 1. Настройка моков
-    
-    # Мок ответа AI
-    ai_response_data = {
-        "intro": "Вот крутой микс для вас!",
-        "tracks": ["Artist1 - Song1", "Artist2 - Song2"]
-    }
-    mock_response_text = f"```json\n{json.dumps(ai_response_data)}\n```"
-    
-    # Мок клиента genai
-    mock_genai_instance = MagicMock()
-    mock_genai_instance.models.generate_content.return_value = MockGenAIResponse(mock_response_text)
-    mock_genai_client.return_value = mock_genai_instance
-
-    # Мок даунлоадера
-    mock_downloader = AsyncMock()
-    # Настраиваем, чтобы поиск возвращал результат
+# Мок даунлоадера
+@pytest.fixture
+def mock_downloader():
+    downloader = AsyncMock()
     async def search_side_effect(*args, **kwargs):
         query = kwargs.get("query", "")
         if "Artist1 - Song1" in query:
@@ -59,33 +41,82 @@ async def test_ai_dj_generate_success(mock_genai_client, client):
         if "Artist2 - Song2" in query:
             return [TrackInfo(identifier="vid2", title="Song2", artist="Artist2", duration=200)]
         return []
+    downloader.search.side_effect = search_side_effect
+    return downloader
 
-    mock_downloader.search = AsyncMock(side_effect=search_side_effect)
+# --- ТЕСТЫ ---
+
+@patch('google.genai.Client')
+@pytest.mark.asyncio
+async def test_ai_dj_generate_success_primary_model(mock_genai_client, client, mock_downloader):
+    """
+    Тест успешного ответа от основной модели (gemini-1.5-flash).
+    """
+    # 1. Настройка моков
+    ai_response_data = {"intro": "Hi from flash!", "tracks": ["Artist1 - Song1"]}
+    mock_response_text = json.dumps(ai_response_data)
+    
+    mock_genai_instance = MagicMock()
+    mock_genai_instance.models.generate_content.return_value = MockGenAIResponse(mock_response_text)
+    mock_genai_client.return_value = mock_genai_instance
+    
     app.state.downloader = mock_downloader
 
-    # 2. Выполнение запроса
-    prompt = "synthwave mix"
-    response = client.get(f"/api/ai/dj?prompt={prompt}")
-    
+    # 2. Выполнение
+    response = client.get("/api/ai/dj?prompt=test")
+
     # 3. Проверки
     assert response.status_code == 200
     data = response.json()
-    
-    # Проверяем, что интро из ответа AI
-    assert data["dj_intro"] == ai_response_data["intro"]
-    
-    # Проверяем, что плейлист содержит треки, найденные даунлоадером
-    assert len(data["playlist"]) == 2
+    assert data["dj_intro"] == "Hi from flash!"
+    assert len(data["playlist"]) == 1
     assert data["playlist"][0]["title"] == "Song1"
-    assert data["playlist"][1]["title"] == "Song2"
-
-    # Проверяем, что AI был вызван с правильным промптом
-    mock_genai_instance.models.generate_content.assert_called_once()
-    call_args = mock_genai_instance.models.generate_content.call_args
-    assert prompt in call_args.kwargs['contents']
     
-    # Проверяем, что downloader.search был вызван для каждого трека из ответа AI
-    assert mock_downloader.search.call_count == 2
-    mock_downloader.search.assert_any_call(query="Artist1 - Song1", limit=1)
-    mock_downloader.search.assert_any_call(query="Artist2 - Song2", limit=1)
+    # Проверяем, что была вызвана только первая модель
+    mock_genai_instance.models.generate_content.assert_called_once_with(
+        model='gemini-1.5-flash',
+        contents="""
+    Ты — DJ Aurora.
+    1. Подбери 5 треков.
+    2. Придумай интро (1 фраза).
+    JSON: {"intro": "...", "tracks": ["Artist - Title"]}
+    """ + "\n\nQuery: test"
+    )
 
+@patch('google.genai.Client')
+@pytest.mark.asyncio
+async def test_ai_dj_generate_fallback_model_success(mock_genai_client, client, mock_downloader):
+    """
+    Тест цепочки отказоустойчивости: первая модель падает, вторая отвечает успешно.
+    """
+    # 1. Настройка моков
+    ai_response_data = {"intro": "Hi from pro!", "tracks": ["Artist2 - Song2"]}
+    mock_response_text = json.dumps(ai_response_data)
+    
+    mock_genai_instance = MagicMock()
+    # Настраиваем side_effect: первая вернет ошибку, вторая - успешный ответ
+    mock_genai_instance.models.generate_content.side_effect = [
+        Exception("Model not found"),
+        MockGenAIResponse(mock_response_text)
+    ]
+    mock_genai_client.return_value = mock_genai_instance
+    
+    app.state.downloader = mock_downloader
+
+    # 2. Выполнение
+    response = client.get("/api/ai/dj?prompt=test")
+
+    # 3. Проверки
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dj_intro"] == "Hi from pro!"
+    assert len(data["playlist"]) == 1
+    assert data["playlist"][0]["title"] == "Song2"
+
+    # Проверяем, что были вызваны ОБЕ модели по очереди
+    calls = mock_genai_instance.models.generate_content.call_args_list
+    assert len(calls) == 2
+    # Первая попытка с 'gemini-1.5-flash'
+    assert calls[0].kwargs['model'] == 'gemini-1.5-flash'
+    # Вторая (успешная) попытка с 'gemini-1.5-pro'
+    assert calls[1].kwargs['model'] == 'gemini-1.5-pro'

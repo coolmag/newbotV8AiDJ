@@ -8,7 +8,6 @@ import os
 import json
 import re
 
-# Импорт нового SDK
 HAS_AI_LIB = False
 try:
     from google import genai
@@ -31,7 +30,6 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from models import TrackInfo
 
-# Ключ берем из переменной окружения
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 logger = logging.getLogger(__name__)
@@ -44,7 +42,6 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Application starting up...")
     
-    # Init Settings
     try:
         settings: Settings = get_settings()
     except Exception as e:
@@ -103,14 +100,30 @@ async def ai_dj_generate(prompt: str, request: Request):
     """
 
     try:
-        # НОВЫЙ СИНТАКСИС (google-genai)
         client = genai.Client(api_key=GEMINI_KEY)
         
-        # Используем новейшую модель
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=f"{system_instruction}\n\nQuery: {prompt}"
-        )
+        # MODEL FALLBACK CHAIN
+        # Пытаемся использовать модели от новой к старой
+        models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
+        response = None
+        used_model = ""
+        
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=f"{system_instruction}\n\nQuery: {prompt}"
+                )
+                used_model = model_name
+                break # Успех!
+            except Exception as e:
+                logger.warning(f"Model {model_name} failed: {e}")
+                continue
+        
+        if not response:
+            raise Exception("All AI models failed.")
+
+        logger.info(f"[AI] Success using model: {used_model}")
         
         clean_text = re.sub(r"```json|```", "", response.text).strip()
         data = json.loads(clean_text)
@@ -130,7 +143,7 @@ async def ai_dj_generate(prompt: str, request: Request):
         return {"dj_intro": intro, "playlist": final_playlist}
 
     except Exception as e:
-        logger.error(f"[AI Error] {e}")
+        logger.error(f"[AI Critical Error] {e}")
         downloader: YouTubeDownloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
         return {"dj_intro": "Сбой нейросети.", "playlist": tracks}
