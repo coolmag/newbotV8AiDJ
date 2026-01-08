@@ -7,13 +7,14 @@ import os
 import json
 import re
 
-# --- G4F AI (FREE) ---
-HAS_AI_LIB = False
+# --- G4F (FREE AI) ---
+HAS_G4F = False
 try:
     import g4f
-    HAS_AI_LIB = True
+    from g4f.client import Client as G4FClient
+    HAS_G4F = True
 except ImportError:
-    print("⚠️ g4f lib not found. AI disabled.")
+    print("⚠️ g4f not found.")
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, JSONResponse, FileResponse
@@ -80,38 +81,67 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-@app.get("/api/ai/dj")
-async def ai_dj_generate(prompt: str, request: Request):
-    # НОВАЯ ЛОГИКА С G4F
-    fallback_intro = "Принято. Включаю."
-    
-    if not HAS_AI_LIB:
-        downloader = request.app.state.downloader
-        tracks = await downloader.search(query=prompt + " music", limit=10)
-        return {"dj_intro": fallback_intro, "playlist": tracks}
+# --- AI LOGIC ---
+def sync_g4f_request(prompt: str):
+    """Синхронная функция для перебора моделей"""
+    if not HAS_G4F:
+        raise Exception("G4F lib missing")
 
-    logger.info(f"[AI] Request to g4f: {prompt}")
-    
-    try:
-        def ask_gpt():
-            return g4f.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+    models_to_try = [
+        g4f.models.gpt_4o,
+        g4f.models.gpt_4o_mini,
+        g4f.models.blackbox,
+        g4f.models.llama_3_1_70b,
+    ]
+
+    system_prompt = (
+        "Ты — DJ Aurora. Подбери 5 треков под запрос. "
+        "Ответ ТОЛЬКО в формате JSON: {\"intro\": \"...\", \"tracks\": [\"Artist - Title\"]}. "
+        "Интро на русском, короткое и дерзкое."
+    )
+
+    client = G4FClient()
+
+    for model in models_to_try:
+        try:
+            print(f"👉 Trying AI model: {model}")
+            response = client.chat.completions.create(
+                model=model,
                 messages=[
-                    {"role": "system", "content": "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"},
-                    {"role": "user", "content": f"Запрос: {prompt}"}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Запрос слушателя: {prompt}"}
                 ]
             )
+            content = response.choices[0].message.content
+            if content and "{" in content:
+                return content, str(model)
+        except Exception as e:
+            print(f"❌ Model {model} failed: {e}")
+            continue
+            
+    raise Exception("All models failed")
+
+@app.get("/api/ai/dj")
+async def ai_dj_generate(prompt: str, request: Request):
+    fallback_intro = "Принято. Включаю музыку."
+    
+    logger.info(f"[AI] Request: {prompt}")
+    
+    try:
+        raw_response, used_model = await asyncio.to_thread(sync_g4f_request, prompt)
         
-        raw_response = await asyncio.get_running_loop().run_in_executor(None, ask_gpt)
+        logger.info(f"[AI] Success via: {used_model}")
         
-        json_str = re.search(r'\{.*\}', raw_response, re.DOTALL)
-        if json_str:
-            data = json.loads(json_str.group())
+        json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
+        if json_match:
+            clean_json = json_match.group()
+            data = json.loads(clean_json)
         else:
             data = {"intro": "Готово.", "tracks": [prompt]}
 
         downloader = request.app.state.downloader
         final_playlist = []
+        
         for t in data.get("tracks", []):
             found = await downloader.search(query=t, limit=1)
             if found: final_playlist.extend(found)
@@ -125,7 +155,7 @@ async def ai_dj_generate(prompt: str, request: Request):
         logger.error(f"[AI Error] {e}")
         downloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
-        return {"dj_intro": "Сбой. Резервный канал.", "playlist": tracks}
+        return {"dj_intro": "Сбой нейросети. Запускаю резерв.", "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
