@@ -6,22 +6,19 @@ const SYNTH = window.speechSynthesis;
 export async function askAurora(userPrompt) {
     console.log(`[AI] Request: ${userPrompt}`);
     
-    // Показываем, что думаем
     const titleEl = document.getElementById('track-title-scrolling');
     if (titleEl) titleEl.textContent = "AI PROCESSING...";
 
     try {
         const response = await fetch(`/api/ai/dj?prompt=${encodeURIComponent(userPrompt)}`);
+        if (!response.ok) throw new Error("AI Offline");
+        
         const data = await response.json();
         
-        // 1. ПРОВЕРКА НА ОШИБКИ В ТЕКСТЕ
-        let introText = data.dj_intro;
-        if (!introText || introText.includes("Error") || introText.includes("404")) {
-            // Если ИИ сломался, говорим стандартную фразу
-            introText = "Принято. Включаю музыку.";
+        // ОЗВУЧКА (Всегда, если есть текст)
+        if (data.dj_intro) {
+            speak(data.dj_intro);
         }
-        
-        speak(introText);
 
         if (data.playlist && data.playlist.length > 0) {
             return data.playlist;
@@ -31,8 +28,7 @@ export async function askAurora(userPrompt) {
 
     } catch (e) {
         console.error("[AI] Error:", e);
-        // Fallback голос
-        speak("Сигнал нестабилен. Запускаю резервный канал.");
+        speak("Сигнал нестабилен. Запускаю поиск.");
         return await fetchPlaylist(userPrompt + " music");
     }
 }
@@ -43,19 +39,19 @@ function speak(text) {
     
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'ru-RU';
-    u.rate = 0.95; 
-    
+    u.rate = 1.0;  // Нормальная скорость
+    u.pitch = 1.1; // Чуть выше (женственнее)
+
     const audio = document.getElementById('audio-player');
     let prevVol = 1.0;
     if (audio) {
         prevVol = audio.volume;
-        audio.volume = 0.3;
+        audio.volume = 0.2; // Сильнее приглушаем музыку
     }
 
     u.onend = () => { 
         if (audio) {
-            // Плавный возврат громкости
-            let v = 0.3;
+            let v = 0.2;
             const fadeIn = setInterval(() => {
                 if (v < prevVol) {
                     v += 0.1;
@@ -66,7 +62,7 @@ function speak(text) {
     };
 
     const voices = SYNTH.getVoices();
-    const ruVoice = voices.find(v => v.lang.includes('ru'));
+    const ruVoice = voices.find(v => v.lang.includes('ru') && (v.name.includes('Google') || v.name.includes('Female')));
     if (ruVoice) u.voice = ruVoice;
 
     SYNTH.speak(u);
