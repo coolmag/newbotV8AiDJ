@@ -31,7 +31,6 @@ class YouTubeDownloader:
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         self._ytmusic = YTMusic()
         
-        # Scaling Protection
         self.semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_DOWNLOADS)
         self.search_semaphore = asyncio.Semaphore(5)
         self._download_locks: Dict[str, asyncio.Lock] = {}
@@ -45,16 +44,20 @@ class YouTubeDownloader:
 
         self.ydl_opts = {
             "quiet": True, "no_warnings": True, "noplaylist": True,
-            "format": "bestaudio/best", "logger": SilentLogger(),
+            "format": "bestaudio/best", 
+            "logger": SilentLogger(),
             "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            'nocheckcertificate': True, 'socket_timeout': 15, 'retries': 3,
+            'nocheckcertificate': True, 
+            'socket_timeout': 30, 
+            'retries': 5,
+            # --- CRITICAL FIX FOR YOUTUBE ---
+            "extractor_args": {"youtubetab": {"skip": ["webp", "dash", "hls"]}},
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
 
     def _get_file_lock(self, video_id: str) -> asyncio.Lock:
-        if video_id not in self._download_locks:
-            self._download_locks[video_id] = asyncio.Lock()
+        if video_id not in self._download_locks: self._download_locks[video_id] = asyncio.Lock()
         return self._download_locks[video_id]
 
     def _is_track_valid(self, entry: Dict, strict: bool = True) -> bool:
@@ -70,7 +73,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v17:{clean_query}"
+            cache_key = f"yt_search_v18:{clean_query}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
 

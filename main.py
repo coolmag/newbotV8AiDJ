@@ -7,17 +7,16 @@ import os
 import json
 import re
 
-# --- G4F (FREE AI) ---
+# --- G4F AI FIX ---
 HAS_G4F = False
 try:
     import g4f
-    from g4f.client import Client as G4FClient
     HAS_G4F = True
 except ImportError:
     print("⚠️ g4f not found.")
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse, JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from telegram import Update
@@ -29,7 +28,6 @@ from radio import RadioManager
 from youtube import YouTubeDownloader
 from handlers import setup_handlers
 from cache_service import CacheService
-from models import TrackInfo
 
 logger = logging.getLogger(__name__)
 _start_time = time.time()
@@ -81,67 +79,44 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# --- AI LOGIC ---
-def sync_g4f_request(prompt: str):
-    """Синхронная функция для перебора моделей"""
-    if not HAS_G4F:
-        raise Exception("G4F lib missing")
-
-    models_to_try = [
-        g4f.models.gpt_4o,
-        g4f.models.gpt_4o_mini,
-        g4f.models.blackbox,
-        g4f.models.llama_3_1_70b,
-    ]
-
-    system_prompt = (
-        "Ты — DJ Aurora. Подбери 5 треков под запрос. "
-        "Ответ ТОЛЬКО в формате JSON: {\"intro\": \"...\", \"tracks\": [\"Artist - Title\"]}. "
-        "Интро на русском, короткое и дерзкое."
-    )
-
-    client = G4FClient()
-
-    for model in models_to_try:
+def sync_ask_ai(prompt: str):
+    if not HAS_G4F: return None
+    
+    models = ["gpt-4o", "gpt-4o-mini", "llama-3.1-70b", "gpt-3.5-turbo"]
+    system = "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"
+    
+    for model in models:
         try:
-            print(f"👉 Trying AI model: {model}")
-            response = client.chat.completions.create(
+            response = g4f.ChatCompletion.create(
                 model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Запрос слушателя: {prompt}"}
-                ]
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             )
-            content = response.choices[0].message.content
-            if content and "{" in content:
-                return content, str(model)
+            if response and "{" in str(response):
+                return str(response)
         except Exception as e:
-            print(f"❌ Model {model} failed: {e}")
+            print(f"Model {model} failed: {e}")
             continue
-            
-    raise Exception("All models failed")
+    return None
 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     fallback_intro = "Принято. Включаю музыку."
-    
     logger.info(f"[AI] Request: {prompt}")
     
     try:
-        raw_response, used_model = await asyncio.to_thread(sync_g4f_request, prompt)
+        raw_response = await asyncio.get_running_loop().run_in_executor(None, sync_ask_ai, prompt)
         
-        logger.info(f"[AI] Success via: {used_model}")
-        
+        if not raw_response:
+            raise Exception("AI models busy")
+
         json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
         if json_match:
-            clean_json = json_match.group()
-            data = json.loads(clean_json)
+            data = json.loads(json_match.group())
         else:
             data = {"intro": "Готово.", "tracks": [prompt]}
 
         downloader = request.app.state.downloader
         final_playlist = []
-        
         for t in data.get("tracks", []):
             found = await downloader.search(query=t, limit=1)
             if found: final_playlist.extend(found)
@@ -155,7 +130,7 @@ async def ai_dj_generate(prompt: str, request: Request):
         logger.error(f"[AI Error] {e}")
         downloader = request.app.state.downloader
         tracks = await downloader.search(query=prompt, limit=10)
-        return {"dj_intro": "Сбой нейросети. Запускаю резерв.", "playlist": tracks}
+        return {"dj_intro": "Сбой нейросети. Резервный канал.", "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
@@ -172,7 +147,7 @@ async def get_audio_file(video_id: str, request: Request):
 @app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}
 
-@app.get("/api/player/playlist", response_model=dict)
+@app.get("/api/player/playlist")
 async def get_playlist(query: str, request: Request):
     downloader: YouTubeDownloader = request.app.state.downloader
     tracks = await downloader.search(query=query, search_mode='track', limit=15)
