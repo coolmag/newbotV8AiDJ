@@ -10,8 +10,9 @@ import re
 # --- G4F LEGACY CORE ---
 import g4f
 
+# ВАЖНО: Исправлен регистр GeekGpt (было GeekGPT)
 PROVIDERS = [
-    g4f.Provider.GeekGPT,
+    g4f.Provider.GeekGpt,
     g4f.Provider.Liaobots,
     g4f.Provider.ChatgptAi,
     g4f.Provider.ChatBase,
@@ -107,11 +108,18 @@ async def ai_dj_generate(prompt: str, request: Request):
     try:
         raw_response = await get_ai_response(full_prompt)
         
+        # Чистка JSON
         json_match = re.search(r'{{.*}}', raw_response, re.DOTALL)
         if json_match:
             data = json.loads(json_match.group())
         else:
-            data = {"intro": "Готово.", "tracks": [prompt]}
+            # Если провайдер вернул текст, а не JSON
+            # Пытаемся извлечь треки, если они разделены новой строкой
+            lines = [l.strip() for l in raw_response.split('\n') if l.strip() and '-' in l]
+            if lines:
+                data = {"intro": "Готово.", "tracks": lines[:5]}
+            else:
+                data = {"intro": "Готово.", "tracks": [prompt]}
 
         downloader = request.app.state.downloader
         final_playlist = []
