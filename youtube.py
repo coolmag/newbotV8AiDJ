@@ -42,51 +42,42 @@ class YouTubeDownloader:
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
 
-        # --- ULTIMATE YOUTUBE BYPASS CONFIG (JAN 2026) ---
+        # --- UNIVERSAL FORMAT CONFIG ---
         self.ydl_opts = {
+            # "bestaudio" - приоритет аудио. "best" - если нет чистого аудио, берем видео с лучшим звуком.
             "format": "bestaudio/best",
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "logger": SilentLogger(),
+            
+            # Конвертация в MP3 (гарантия совместимости)
+            "postprocessors": [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             
             # Сетевые настройки
+            'nocheckcertificate': True,
+            'socket_timeout': 30,
+            'retries': 10,
             "source_address": "0.0.0.0",
-            "retries": 15,
-            "fragment_retries": 15,
-            "socket_timeout": 30,
             
-            # Имитация человека (Slow down to avoid bans)
-            "sleep_interval": 2, 
-            "max_sleep_interval": 10,
-
-            # Заголовки (Magic Headers)
+            # Headers & Client
             "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-User": "?1",
-                "Sec-Fetch-Dest": "document",
-                "Upgrade-Insecure-Requests": "1",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             },
             
-            # Аргументы экстрактора (Bypass anti-bot)
+            # Обход защиты (Убрал skip: webp/dash, так как это вызывало ошибку форматов)
             "extractor_args": {
-                "youtubetab": {
-                    "skip": ["webp", "initial_data", "comments"]
-                },
                 "youtube": {
-                    "player_client": ["web", "android"],
+                    # Оставляем android, но добавляем web, чтобы было больше форматов
+                    "player_client": ["android", "web"],
                     "player_skip": ["configs", "webview"]
                 }
             },
-            
-            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-            'nocheckcertificate': True,
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
 
@@ -107,7 +98,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v21:{clean_query}"
+            cache_key = f"yt_search_v22:{clean_query}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
@@ -183,14 +174,14 @@ class YouTubeDownloader:
                         with yt_dlp.YoutubeDL(self.ydl_opts) as ydl: ydl.download([video_id])
                         return True
                     except Exception as e: 
-                        logger.warning(f"Skipping {video_id}: {e}") # Warning вместо Error
+                        logger.warning(f"DL failed {video_id}: {e}")
                         return False
                 
-                # Добавил таймаут на загрузку, чтобы не висел вечно
+                # Таймаут 90 сек
                 try:
                     success = await asyncio.wait_for(
                         asyncio.get_running_loop().run_in_executor(None, do_dl), 
-                        timeout=60
+                        timeout=90
                     )
                 except asyncio.TimeoutError:
                     success = False
