@@ -23,8 +23,6 @@ class SilentLogger:
     def error(self, msg: str): logger.error(f"[yt-dlp] {msg}")
 
 class YouTubeDownloader:
-    FORBIDDEN_WORDS = ['tutorial', 'making of', 'lesson', 'course', 'podcast', 'backing track', 'karaoke']
-
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
@@ -42,10 +40,10 @@ class YouTubeDownloader:
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
 
-        # --- SINGLE TRUTH CONFIG (JAN 2026) ---
+        # --- YOUTUBE CONFIG 2026 ---
         self.ydl_opts = {
-            # ЕДИНСТВЕННЫЙ РАБОЧИЙ ФОРМАТ
-            "format": "bestaudio[abr>0]/best", 
+            # ТОТ САМЫЙ РАБОЧИЙ ФОРМАТ
+            "format": "bestaudio[abr>0]/best",
             
             "noplaylist": True,
             "quiet": True,
@@ -58,12 +56,10 @@ class YouTubeDownloader:
             "fragment_retries": 20,
             "socket_timeout": 30,
             
-            # ЗАГОЛОВКИ (ОБЯЗАТЕЛЬНО)
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0"
             },
             
-            # BYPASS ARGS
             "extractor_args": {
                 "youtube": {
                     "player_client": ["android", "web"],
@@ -71,7 +67,6 @@ class YouTubeDownloader:
                 }
             },
             
-            # Конвертация (чтобы наверняка был MP3)
             "postprocessors": [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -90,7 +85,8 @@ class YouTubeDownloader:
         if not entry: return False
         if entry.get('resultType') not in ['song', 'video']: return False
         title = str(entry.get('title', '')).lower()
-        if any(w in title for w in self.FORBIDDEN_WORDS): return False
+        forbidden = ['tutorial', 'making of', 'lesson', 'course', 'podcast', 'backing track', 'karaoke']
+        if any(w in title for w in forbidden): return False
         try: dur = int(entry.get('duration_seconds', 0))
         except: dur = 0
         if strict: return 45 < dur < 900
@@ -99,7 +95,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v25:{clean_query}"
+            cache_key = f"yt_search_v26:{clean_query}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
