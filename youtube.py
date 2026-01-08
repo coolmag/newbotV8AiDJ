@@ -42,43 +42,50 @@ class YouTubeDownloader:
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
 
-        # --- UNIVERSAL FORMAT CONFIG ---
+        # --- COMMUNITY STANDARD CONFIG (JAN 2026) ---
         self.ydl_opts = {
-            # "bestaudio" - приоритет аудио. "best" - если нет чистого аудио, берем видео с лучшим звуком.
-            "format": "bestaudio/best",
+            # Берем лучшее видео (до 720p) + аудио, либо просто лучшее.
+            # Это обходит бан "audio-only" запросов.
+            "format": "(bestvideo[height<=720]+bestaudio/best[height<=720])/bestaudio/best",
+            
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "logger": SilentLogger(),
             
-            # Конвертация в MP3 (гарантия совместимости)
+            "retries": 20,
+            "fragment_retries": 20,
+            
+            # Принудительная конвертация в MP3
             "postprocessors": [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
+            
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
+            "restrictfilenames": True,
             
-            # Сетевые настройки
-            'nocheckcertificate': True,
-            'socket_timeout': 30,
-            'retries': 10,
-            "source_address": "0.0.0.0",
-            
-            # Headers & Client
+            # MAGIC HEADERS
             "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0"
             },
             
-            # Обход защиты (Убрал skip: webp/dash, так как это вызывало ошибку форматов)
+            # BYPASS ARGS
             "extractor_args": {
+                "youtubetab": {
+                    "skip": ["webp", "initial_data", "comments"]
+                },
                 "youtube": {
-                    # Оставляем android, но добавляем web, чтобы было больше форматов
-                    "player_client": ["android", "web"],
-                    "player_skip": ["configs", "webview"]
+                    "player_client": ["web", "android", "ios"],
+                    "player_skip": ["configs", "webview", "js"]
                 }
             },
+            
+            'nocheckcertificate': True,
+            'socket_timeout': 30,
         }
+        
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
 
     def _get_file_lock(self, video_id: str) -> asyncio.Lock:
@@ -98,7 +105,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v22:{clean_query}"
+            cache_key = f"yt_search_v24:{clean_query}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
@@ -177,11 +184,10 @@ class YouTubeDownloader:
                         logger.warning(f"DL failed {video_id}: {e}")
                         return False
                 
-                # Таймаут 90 сек
                 try:
                     success = await asyncio.wait_for(
                         asyncio.get_running_loop().run_in_executor(None, do_dl), 
-                        timeout=90
+                        timeout=120 # Увеличил таймаут для видео
                     )
                 except asyncio.TimeoutError:
                     success = False
