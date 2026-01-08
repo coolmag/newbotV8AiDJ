@@ -70,8 +70,7 @@ class YouTubeDownloader:
                 "youtube": {
                     # Ротация клиентов + Deno (автоматически подхватится yt-dlp)
                     "player_client": ["android", "web", "ios"],
-                    "player_skip": ["configs", "webview", "js"],
-                    "skip": ["dash", "hls"]
+                    "player_skip": ["configs", "webview", "js"]
                 }
             },
             'nocheckcertificate': True,
