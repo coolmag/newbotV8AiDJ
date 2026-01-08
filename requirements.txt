@@ -9,6 +9,6 @@ psutil==5.9.8
 nest-asyncio==1.6.0
 ytmusicapi==1.5.3
 curl_cffi==0.14.0
-# --- CRITICAL VERSIONS ---
-yt-dlp==2025.12.8
 g4f==0.3.2.8
+# КРИТИЧЕСКИ ВАЖНО: Последняя версия для поддержки Deno
+yt-dlp==2025.12.8
