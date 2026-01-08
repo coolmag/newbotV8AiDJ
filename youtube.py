@@ -16,9 +16,7 @@ logger = logging.getLogger(__name__)
 class SilentLogger:
     def debug(self, msg: str): pass
     def warning(self, msg: str): pass
-    def error(self, msg: str):
-        if "Did not get any data blocks" not in msg:
-            logger.error(f"[yt-dlp] {msg}")
+    def error(self, msg: str): logger.error(f"[yt-dlp] {msg}")
 
 class YouTubeDownloader:
     def __init__(self, settings: Settings, cache_service: CacheService):
@@ -37,19 +35,17 @@ class YouTubeDownloader:
             with open(self.cookie_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
         
-        # --- INFRASTRUCTURE UPDATE 2026 ---
+        # --- CLASSIC WORKING CONFIG ---
         self.ydl_opts = {
-            # СТРАТЕГИЯ СЛИЯНИЯ:
-            # Скачиваем видео и аудио отдельно, затем FFmpeg их склеивает.
-            # Это обходит удаление легаси-форматов (itag 18/22).
-            "format": "(bestvideo[height<=720]+bestaudio/best[height<=720])/bestaudio/best",
+            # Приоритет аудио. Если нет - берем лучшее видео.
+            "format": "bestaudio/best",
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "logger": SilentLogger(),
             
-            # FFmpeg склеит потоки и отдаст MP3
+            # Конвертация в MP3
             "postprocessors": [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -57,20 +53,18 @@ class YouTubeDownloader:
             }],
             
             "socket_timeout": 30,
-            "retries": 15,
-            "fragment_retries": 15,
+            "retries": 10,
             
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            },
-            
+            # Маскировка под Android (самый стабильный клиент)
             "extractor_args": {
                 "youtube": {
-                    # Ротация клиентов + Deno (автоматически подхватится yt-dlp)
-                    "player_client": ["android", "web", "ios"],
-                    "player_skip": ["configs", "webview", "js"],
-                    "skip": ["dash", "hls"]
+                    "player_client": ["android", "web"],
+                    "player_skip": ["configs", "webview"]
                 }
+            },
+            
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             },
             'nocheckcertificate': True,
         }
@@ -85,7 +79,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean = query.lower().strip()
-            cache_key = f"s_v32:{clean}"
+            cache_key = f"s_v34:{clean}"
             if cached := await self._cache.get(cache_key):
                 return cached
             
@@ -150,9 +144,8 @@ class YouTubeDownloader:
                         return False
 
                 if await asyncio.get_running_loop().run_in_executor(None, try_dl):
-                    # Увеличенный таймаут для склейки видео+аудио (FFmpeg нужно время)
                     start = time.time()
-                    while time.time() - start < 90:
+                    while time.time() - start < 120:
                         if path.exists() and path.stat().st_size > 5000:
                             if not glob.glob(str(self._settings.DOWNLOADS_DIR / f"{video_id}.*part*")):
                                 info = await self.get_track_info(video_id)
@@ -167,7 +160,6 @@ class YouTubeDownloader:
     def _find_downloaded_file(self, video_id: str) -> Optional[Path]:
         path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         return path if path.exists() else None
-    
+
     async def wait_for_download_completion(self, video_id: str, timeout: int = 60) -> Optional[DownloadResult]:
-        # Legacy support
         return await self.download(video_id)
