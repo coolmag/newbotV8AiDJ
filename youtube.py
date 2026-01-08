@@ -143,7 +143,7 @@ class YouTubeDownloader:
             async with self.semaphore:
                 def try_dl():
                     try:
-                        with yt_dlp.YoutubeDL(self.ydl_p_opts) as ydl:
+                        with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                             ydl.download([video_id])
                         return True
                     except Exception as e:
