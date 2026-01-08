@@ -7,16 +7,16 @@ import os
 import json
 import re
 
-# --- G4F LEGACY CORE ---
+# --- G4F STABLE CORE ---
 import g4f
 
-# ВАЖНО: Исправлен регистр GeekGpt (было GeekGPT)
+# Актуальный список провайдеров на 2026 (g4f 0.3.x)
 PROVIDERS = [
     g4f.Provider.GeekGpt,
     g4f.Provider.Liaobots,
-    g4f.Provider.ChatgptAi,
-    g4f.Provider.ChatBase,
-    g4f.Provider.GptForLove,
+    g4f.Provider.Chatgpt4o,  # Исправлено имя!
+    g4f.Provider.Blackbox,   # Добавил Blackbox (очень стабильный)
+    g4f.Provider.FreeGpt,
 ]
 
 async def get_ai_response(prompt: str) -> str:
@@ -28,10 +28,14 @@ async def get_ai_response(prompt: str) -> str:
                 provider=provider,
                 timeout=20,
             )
+            # Проверка на пустой ответ
+            if not response: continue
             return str(response)
         except:
             continue
-    return '{"intro": "Связь нестабильна. Включаю музыку.", "tracks": []}'
+            
+    # Резервный ответ
+    return '{"intro": "Связь с космосом прервана. Включаю музыку.", "tracks": []}'
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
