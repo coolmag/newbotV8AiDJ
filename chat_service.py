@@ -40,10 +40,19 @@ class ChatManager:
     @staticmethod
     def clean_response(text: str) -> str:
         if not text: return ""
+        # Удаляем ссылки
         text = re.sub(r'http[s]?://\S+', '', text)
-        junk = ["GigaChat", "Сбер", "AI language model", "OpenAI"]
+        # Удаляем мусор
+        junk = [
+            "GigaChat", "Сбер", "AI language model", "OpenAI", 
+            "Want best roleplay", "llmplayground", "created by"
+        ]
         for phrase in junk:
-            text = re.sub(f"(?i){phrase}", "Aurora", text)
+            # Удаляем фразу и всё что после неё, если это похоже на подпись
+            if "roleplay" in phrase or "llm" in phrase:
+                 text = re.sub(f"(?i){phrase}.*", "", text)
+            else:
+                 text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
     @staticmethod
@@ -64,7 +73,7 @@ class ChatManager:
         if HAS_GIGACHAT and giga_key:
             try:
                 def ask_sber():
-                    # scope="GIGACHAT_API_PERS" важен для личных аккаунтов!
+                    # Отключаем проверку SSL, так как в контейнерах часто нет корневых сертификатов МинЦифры
                     with GigaChat(credentials=giga_key, scope="GIGACHAT_API_PERS", verify_ssl_certs=False) as giga:
                         return giga.chat(messages).choices[0].message.content
                 
@@ -83,7 +92,8 @@ class ChatManager:
                     ).choices[0].message.content
                 
                 response_text = await asyncio.get_running_loop().run_in_executor(None, ask_g4f)
-            except: pass
+            except Exception as e:
+                logger.warning(f"G4F Error: {e}")
 
         # 3. FALLBACK
         if not response_text:
