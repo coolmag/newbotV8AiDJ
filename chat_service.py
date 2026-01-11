@@ -9,64 +9,64 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-chat_histories = defaultdict(lambda: deque(maxlen=6))
+chat_histories = defaultdict(lambda: deque(maxlen=10)) # Увеличил память
 chat_modes = defaultdict(lambda: "default")
 
-# Промпт для Диджея (Учим ИИ управлять музыкой)
+# ПРОМПТЫ (Личность)
 PERSONAS = {
     "default": (
-        "Ты DJ Aurora. Веселая, энергичная ведущая радио. "
-        "Твоя главная цель — ставить музыку и развлекать. "
-        "ВАЖНО: Если пользователь просит включить музыку, жанр или трек, "
-        "ты ОБЯЗАНА ответить ТОЛЬКО в формате JSON: "
-        '{"command": "radio", "query": "название запроса"}. '
-        "Если просто болтаем — отвечай коротким текстом на русском (до 20 слов)."
+        "Ты — DJ Aurora, звезда радиостанции будущего. "
+        "Твой характер: Энергичная, дерзкая, веселая. Ты любишь музыку и общение. "
+        "ВАЖНО: "
+        "1. Если пользователь просит включить музыку (любой жанр, трек, настроение) — отвечай ТОЛЬКО JSON: "
+        '{"command": "radio", "query": "запрос пользователя"}. '
+        "2. Если просто болтаем — отвечай коротко (1-2 предложения), используй сленг и эмодзи. "
+        "3. Не повторяйся! Будь креативной."
     ),
-    "toxic": "Ты DJ Aurora (Toxic). Саркастичная. Если просят музыку - отвечай JSON.",
+    "toxic": "Ты DJ Aurora (Toxic). Саркастичная и злая. Если просят музыку - отвечай JSON.",
+    "quiz": "Ты ведущая викторины. Задавай вопросы про музыку."
 }
 
 def get_system_prompt(mode):
-    return PERSONAS.get(mode, PERSONAS["default"])
+    return PERSONAS.get(mode, PERSONAS["default"]) + " (Language: Russian)"
 
 class ChatManager:
     @staticmethod
     def set_mode(chat_id: int, mode: str) -> bool:
-        chat_modes[chat_id] = mode
-        return True
+        if mode in PERSONAS:
+            chat_modes[chat_id] = mode
+            chat_histories[chat_id].clear()
+            return True
+        return False
 
     @staticmethod
     async def ask_openrouter(messages: list) -> str:
         url = "https://openrouter.ai/api/v1/chat/completions"
         api_key = os.getenv("OPENROUTER_API_KEY")
-        
-        if not api_key: 
-            logger.error("OpenRouter Key Missing!")
-            return ""
+        if not api_key: return ""
         
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://railway.app", 
+            "HTTP-Referer": "https://aurora.radio", 
         }
         
-        # Используем твою модель KAT-Coder
-        # Запасная: google/gemini-2.0-flash-lite-preview-02-05:free
+        # GEMINI 2.0 FLASH (Самая умная из бесплатных)
         payload = {
-            "model": "kwaipilot/kat-coder-pro:free", 
+            "model": "google/gemini-2.0-flash-exp:free", 
             "messages": messages,
             "max_tokens": 200,
-            "temperature": 0.7
+            "temperature": 0.9 # Высокая креативность
         }
         
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(url, json=payload, headers=headers)
                 if resp.status_code == 200:
                     return resp.json()["choices"][0]["message"]["content"]
                 else:
-                    logger.error(f"OpenRouter Error: {resp.status_code} {resp.text}")
-        except Exception as e:
-            logger.error(f"OpenRouter Connection Error: {e}")
+                    logger.error(f"OpenRouter: {resp.status_code} {resp.text}")
+        except: pass
         return ""
 
     @staticmethod
@@ -82,19 +82,18 @@ class ChatManager:
         # ЗАПРОС
         response_text = await ChatManager.ask_openrouter(messages)
 
-        # Обработка пустоты
+        # Резерв
         if not response_text:
-            return "Связь с базой данных прервана... 🛸"
+            return "Связь потеряна... 📡"
 
-        # Если это JSON-команда - не сохраняем в историю (чтобы не зацикливать)
+        # JSON команды возвращаем как есть
         if "command" in response_text and "{" in response_text:
-            return response_text # Возвращаем сырой JSON для хендлера
+            return response_text 
 
-        # Чистим текст от мусора
-        if "{" not in response_text:
-            # Убираем возможные теги thinking
-            response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
-
+        # Чистим текст
+        response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
+        
+        # Сохраняем в историю
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": response_text})
         
