@@ -4,10 +4,12 @@ import asyncio
 import json
 import random
 import time
-import psutil # Для проверки памяти
+import psutil
+import httpx 
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.constants import ParseMode, ChatType
+from telegram.error import BadRequest
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler,
     MessageHandler, filters
@@ -23,34 +25,54 @@ logger = logging.getLogger("handlers")
 GREETINGS = {
     "default": ["Привет! Я снова я. 🎧", "Режим по умолчанию. Погнали!", "Снова в эфире!"],
     "toxic": ["Ну че, переключил? Теперь терпи.", "Ой, опять ты... Ладно, слушаю.", "Режим токсика активирован. 🙄"],
-    "gop": ["Здарова, бродяга! Че каво?", "Ну че, посидим, пообщаемся?", "Вечер в хату."],
-    "chill": ["Вайб включен... 🌌", "Расслабься, я с тобой.", "Тишина и музыка..."],
-    "quiz": ["Время викторины! 🎯 Кто тут самый умный?", "Я готова задавать вопросы!", "Погнали играть!"]
+    "gop": ["Здарова, бродяга! Че каво?", "Ну че, посидим?", "Вечер в хату."],
+    "chill": ["Вайб включен... 🌌", "Расслабься...", "Тишина и музыка..."],
+    "quiz": ["Время викторины! 🎯", "Я готова задавать вопросы!"]
 }
 
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔍 *Диагностика систем...*", parse_mode=ParseMode.MARKDOWN)
+    status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
     
     report = ["📊 *System Status Report*"]
     
-    # 1. Server Load
+    # 1. Server Resources
     mem = psutil.virtual_memory()
-    report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
+    disk = psutil.disk_usage('/')
+    report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}% | Disk {disk.percent}%")
     
-    # 2. AI Latency Check
-    start_ai = time.time()
-    ai_resp = await ChatManager.get_response(update.effective_chat.id, "ping", "Admin")
-    ai_time = round(time.time() - start_ai, 2)
-    ai_status = "✅ OK" if "{" not in ai_resp and len(ai_resp) > 0 else "⚠️ Slow/Fallback"
-    if ai_time > 5: ai_status = "❌ Timeout"
-    report.append(f"🧠 *AI Core:* {ai_status} ({ai_time}s)")
+    # 2. AI Check (Ping OpenRouter)
+    try:
+        start_ai = time.time()
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("https://openrouter.ai/api/v1/models")
+            ai_lat = round((time.time() - start_ai) * 1000)
+            if resp.status_code == 200:
+                report.append(f"🧠 *AI API:* ✅ Online ({ai_lat}ms)")
+            else:
+                report.append(f"🧠 *AI API:* ⚠️ Error {resp.status_code}")
+    except Exception as e:
+        report.append(f"🧠 *AI API:* ❌ Unreachable ({str(e)})")
+
+    # 3. YouTube Check (Real search)
+    try:
+        start_yt = time.time()
+        dl = context.application.downloader
+        # Ищем реальный трек (легкий запрос)
+        tracks = await dl.search("test", limit=1)
+        yt_lat = round((time.time() - start_yt) * 1000)
+        if tracks:
+            report.append(f"🎵 *YouTube:* ✅ Online ({yt_lat}ms)")
+        else:
+            report.append(f"🎵 *YouTube:* ⚠️ Empty Result")
+    except Exception as e:
+        report.append(f"🎵 *YouTube:* ❌ Error ({str(e)})")
     
-    # 3. Radio State
+    # 4. Radio State
     active_sessions = len(context.application.radio_manager._sessions)
     report.append(f"📻 *Radio:* {active_sessions} active streams")
     
-    await msg.edit_text("\n".join(report), parse_mode=ParseMode.MARKDOWN)
+    await status_msg.edit_text("\n".join(report), parse_mode=ParseMode.MARKDOWN)
 
 # --- ADMIN PANEL ---
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -72,10 +94,15 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if row: keyboard.append(row)
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")])
     
+    markup = InlineKeyboardMarkup(keyboard)
+    
     if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
     elif update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+        try:
+            await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+        except BadRequest:
+            pass # Игнорируем, если ничего не изменилось
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -96,7 +123,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = context.application.settings
     url = settings.BASE_URL
-    text = "🎧 *Aurora v50*\n\n/radio — Эфир\n/admin — Настройки ИИ\n/status — Диагностика"
+    text = "🎧 *Aurora v51*\n\n/radio — Эфир\n/admin — Настройки ИИ\n/status — Диагностика"
     kb = []
     if url and url.startswith("http"):
         kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
@@ -176,7 +203,6 @@ def setup_handlers(app, radio, settings, downloader):
     app.add_handler(CommandHandler("player", player_command))
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("mode", admin_command))
-    app.add_handler(CommandHandler("status", status_command)) # DIAGNOSTICS
-    
+    app.add_handler(CommandHandler("status", status_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
     app.add_handler(CallbackQueryHandler(button_callback))

@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application
 
 from config import get_settings, Settings
@@ -48,6 +48,16 @@ async def lifespan(app: FastAPI):
     
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
     setup_handlers(app=tg_app, radio=radio_manager, settings=settings, downloader=downloader)
+    
+    # Установка меню команд
+    commands = [
+        BotCommand("radio", "🎲 Случайная волна"),
+        BotCommand("play", "🔎 Найти трек"),
+        BotCommand("admin", "🤖 Настроить личность ИИ"),
+        BotCommand("status", "📊 Проверить статус систем"),
+        BotCommand("stop", "🛑 Остановить музыку"),
+    ]
+    await tg_app.bot.set_my_commands(commands)
     
     await tg_app.initialize()
     await tg_app.start()
