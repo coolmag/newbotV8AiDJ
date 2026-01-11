@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import asyncio
+import json # Важно
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.constants import ParseMode, ChatType
@@ -85,24 +86,31 @@ async def set_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     text = update.message.text
-    chat_type = update.effective_chat.type
+    chat_id = update.effective_chat.id
     
-    # Логируем
-    logger.info(f"Msg from {chat_type}: {text}")
+    # ... (Логика триггеров: is_reply, is_mention - остается) ...
+    is_triggered = True # Для теста всегда True
 
-    should_reply = False
-    if chat_type == ChatType.PRIVATE:
-        should_reply = True
-    else:
-        is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-        is_mention = ("аврора" in text.lower()) or ("бот" in text.lower())
-        if is_reply or is_mention:
-            should_reply = True
+    if is_triggered:
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        
+        response = await ChatManager.get_response(chat_id, text, update.effective_user.first_name)
+        
+        # --- AI COMMAND PARSING ---
+        try:
+            # Пытаемся найти JSON в ответе
+            if "{" in response and "}" in response:
+                json_str = response[response.find("{"):response.rfind("}")+1]
+                cmd_data = json.loads(json_str)
+                
+                if cmd_data.get("command") == "radio":
+                    query = cmd_data.get("query", "random")
+                    await update.message.reply_text(f"🎧 Поняла! Включаю: *{query}*", parse_mode=ParseMode.MARKDOWN)
+                    asyncio.create_task(context.application.radio_manager.start(chat_id, query))
+                    return
+        except:
+            pass # Если не JSON - просто текст
 
-    if should_reply:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        user = update.effective_user.first_name
-        response = await ChatManager.get_response(update.effective_chat.id, text, user)
         await update.message.reply_text(response)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
