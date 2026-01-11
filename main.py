@@ -8,8 +8,13 @@ import json
 import re
 import random
 
-# --- G4F STABLE ---
-import g4f
+# --- G4F SAFE IMPORT ---
+HAS_G4F = False
+try:
+    import g4f
+    HAS_G4F = True
+except ImportError:
+    print("⚠️ g4f not found. AI features disabled.")
 
 # БЕЗОПАСНАЯ СБОРКА ПРОВАЙДЕРОВ
 POSSIBLE_PROVIDERS = [
@@ -21,9 +26,10 @@ POSSIBLE_PROVIDERS = [
 ]
 
 WORKING_PROVIDERS = []
-for name in POSSIBLE_PROVIDERS:
-    if hasattr(g4f.Provider, name):
-        WORKING_PROVIDERS.append(getattr(g4f.Provider, name))
+if HAS_G4F:
+    for name in POSSIBLE_PROVIDERS:
+        if hasattr(g4f.Provider, name):
+            WORKING_PROVIDERS.append(getattr(g4f.Provider, name))
 
 BACKUP_INTROS = [
     "В эфире Аврора. Лови волну.",
@@ -39,6 +45,7 @@ BACKUP_INTROS = [
 ]
 
 async def get_ai_response(prompt: str) -> str:
+    if not HAS_G4F: return ""
     providers_to_try = WORKING_PROVIDERS if WORKING_PROVIDERS else [None]
     for provider in providers_to_try:
         try:
@@ -112,7 +119,7 @@ async def lifespan(app: FastAPI):
     await tg_app.shutdown()
     await cache.close()
 
-# ИСПРАВЛЕННАЯ СТРОКА: передаем функцию lifespan, а не переменную app
+# ИСПРАВЛЕННАЯ СТРОКА
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
