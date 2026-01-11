@@ -1,21 +1,14 @@
 import logging
 from collections import deque, defaultdict
+import asyncio
 import g4f
+from g4f.client import Client as G4FClient
 from ai_personas import get_system_prompt, PERSONAS
 
 logger = logging.getLogger(__name__)
 
-# Память
 chat_histories = defaultdict(lambda: deque(maxlen=10))
 chat_modes = defaultdict(lambda: "default")
-
-# ОБНОВЛЕННЫЙ СПИСОК ПРОВАЙДЕРОВ (Стабильные на 2026)
-PROVIDERS = [
-    g4f.Provider.Liaobots,
-    g4f.Provider.Blackbox,
-    g4f.Provider.GeekGpt,
-    g4f.Provider.FreeGpt
-]
 
 class ChatManager:
     @staticmethod
@@ -34,44 +27,49 @@ class ChatManager:
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
-        
         system_instruction = get_system_prompt(mode)
+        
         messages = [{"role": "system", "content": system_instruction}]
-        
-        for msg in history:
-            messages.append(msg)
-            
+        for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
-        
-        response_text = ""
-        
-        # Перебор провайдеров с логированием
-        for provider in PROVIDERS:
-            try:
-                response = await g4f.ChatCompletion.create_async(
-                    model=g4f.models.gpt_35_turbo,
-                    messages=messages,
-                    provider=provider,
-                    timeout=20
-                )
-                if response:
-                    response_text = str(response)
-                    break
-            except Exception as e:
-                logger.warning(f"Provider {provider.__name__} failed: {e}")
-                continue
-            
-        if not response_text:
-            # Резервные фразы, если ИИ совсем умер
-            fallbacks = {
-                "toxic": "Отвали, у меня сервер лагает.",
-                "chill": "Звезды сегодня не сошлись...",
-                "gop": "Слыш, связь плохая.",
-                "default": "Что-то я тебя не слышу. Повтори?"
-            }
-            return fallbacks.get(mode, "Система перегружена.")
 
-        # Сохраняем в историю
+        response_text = ""
+
+        # G4F POOL (Бесплатные и доступные)
+        # Мы пробуем несколько моделей, так как провайдеры могут отваливаться
+        models_to_try = [
+            g4f.models.gpt_4o_mini, # Обычно самый быстрый
+            g4f.models.llama_3_1_70b,
+            g4f.models.blackbox,    # Надежный
+        ]
+
+        def ask_g4f():
+            client = G4FClient()
+            for model in models_to_try:
+                try:
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=messages
+                    )
+                    if response.choices[0].message.content:
+                        return response.choices[0].message.content
+                except: continue
+            return None
+
+        try:
+            response_text = await asyncio.get_running_loop().run_in_executor(None, ask_g4f)
+        except Exception as e:
+            logger.error(f"Chat AI Error: {e}")
+
+        if not response_text:
+            # Саркастичные заглушки, если ИИ умер
+            fallbacks = {
+                "toxic": "Мой интеллект слишком высок для твоих вопросов.",
+                "gop": "Слыш, сеть не ловит.",
+                "default": "Что-то помехи в эфире... Повтори?"
+            }
+            return fallbacks.get(mode, "...")
+
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": response_text})
         
