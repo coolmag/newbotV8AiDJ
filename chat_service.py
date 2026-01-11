@@ -35,7 +35,7 @@ class ChatManager:
         return True
 
     @staticmethod
-async def ask_openrouter(messages: list) -> str:
+    async def ask_openrouter(messages: list) -> str:
         url = "https://openrouter.ai/api/v1/chat/completions"
         api_key = os.getenv("OPENROUTER_API_KEY")
         
