@@ -5,17 +5,16 @@ from ai_personas import get_system_prompt, PERSONAS
 
 logger = logging.getLogger(__name__)
 
-# Память: словарь, где ключ = chat_id, значение = очередь из 10 последних сообщений
+# Память
 chat_histories = defaultdict(lambda: deque(maxlen=10))
-
-# Текущий режим для каждого чата
 chat_modes = defaultdict(lambda: "default")
 
+# ОБНОВЛЕННЫЙ СПИСОК ПРОВАЙДЕРОВ (Стабильные на 2026)
 PROVIDERS = [
-    g4f.Provider.GeekGpt,
     g4f.Provider.Liaobots,
     g4f.Provider.Blackbox,
-    g4f.Provider.Chatgpt4o
+    g4f.Provider.GeekGpt,
+    g4f.Provider.FreeGpt
 ]
 
 class ChatManager:
@@ -23,7 +22,6 @@ class ChatManager:
     def set_mode(chat_id: int, mode: str) -> bool:
         if mode in PERSONAS:
             chat_modes[chat_id] = mode
-            # При смене режима лучше очистить историю, чтобы не путать бота
             chat_histories[chat_id].clear()
             return True
         return False
@@ -37,38 +35,43 @@ class ChatManager:
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
         
-        # Формируем промпт
         system_instruction = get_system_prompt(mode)
-        
-        # Собираем контекст для нейросети
         messages = [{"role": "system", "content": system_instruction}]
         
-        # Добавляем историю
         for msg in history:
             messages.append(msg)
             
-        # Добавляем текущее сообщение
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
         
-        # Запрос к AI
         response_text = ""
+        
+        # Перебор провайдеров с логированием
         for provider in PROVIDERS:
             try:
                 response = await g4f.ChatCompletion.create_async(
                     model=g4f.models.gpt_35_turbo,
                     messages=messages,
                     provider=provider,
-                    timeout=15
+                    timeout=20
                 )
                 if response:
                     response_text = str(response)
                     break
-            except: continue
+            except Exception as e:
+                logger.warning(f"Provider {provider.__name__} failed: {e}")
+                continue
             
         if not response_text:
-            return "..." # Если ИИ сдох, просто молчим или ставим многозначительное троеточие
+            # Резервные фразы, если ИИ совсем умер
+            fallbacks = {
+                "toxic": "Отвали, у меня сервер лагает.",
+                "chill": "Звезды сегодня не сошлись...",
+                "gop": "Слыш, связь плохая.",
+                "default": "Что-то я тебя не слышу. Повтори?"
+            }
+            return fallbacks.get(mode, "Система перегружена.")
 
-        # Сохраняем в историю (чтобы бот помнил контекст следующего ответа)
+        # Сохраняем в историю
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": response_text})
         
