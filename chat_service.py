@@ -5,7 +5,7 @@ import json
 import urllib.parse
 from collections import deque, defaultdict
 import asyncio
-import httpx # Для запросов
+import httpx 
 
 logger = logging.getLogger(__name__)
 
@@ -36,35 +36,68 @@ class ChatManager:
     def clean_response(text: str) -> str:
         if not text: return ""
         text = re.sub(r'http[s]?://\S+', '', text)
-        junk = ["Pollinations", "OpenAI", "ChatGPT", "AI model", "language model"]
+        junk = ["Pollinations", "OpenAI", "ChatGPT", "AI model", "Mistral", "language model"]
         for phrase in junk:
             text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
-    # --- POLLINATIONS GEN API (2026 STABLE) ---
+    # --- 1. POLLINATIONS (MISTRAL MODE) ---
     @staticmethod
     async def ask_pollinations(messages: list) -> str:
-        # Мы используем метод GET, так как он самый надежный для этого API
-        # Собираем промпт
         full_prompt = ""
         for msg in messages:
             full_prompt += f"{msg['role']}: {msg['content']}\n"
         
-        # Кодируем для URL
         encoded_prompt = urllib.parse.quote(full_prompt)
         
-        # Новый эндпоинт (text.pollinations.ai/PROMPT)
-        url = f"https://text.pollinations.ai/{encoded_prompt}?model=openai&seed={random.randint(1, 1000)}"
+        # MISTRAL (Менее загружена)
+        url = f"https://text.pollinations.ai/{encoded_prompt}?model=mistral&seed={random.randint(1, 1000)}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
         
         try:
-            async with httpx.AsyncClient(timeout=25.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
                 resp = await client.get(url)
+                if resp.status_code == 200: return resp.text
+                else: logger.warning(f"Pollinations Status: {resp.status_code}")
+        except: pass
+        return ""
+
+    # --- 2. DUCKDUCKGO (BACKUP) ---
+    @staticmethod
+    async def ask_duckduckgo(messages: list) -> str:
+        url = "https://duckduckgo.com/duckchat/v1/chat"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://duckduckgo.com/",
+            "x-vqd-accept": "1"
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                status = await client.get("https://duckduckgo.com/duckchat/v1/status", headers=headers)
+                token = status.headers.get("x-vqd-4")
+                if not token: return ""
+
+                chat_headers = headers.copy()
+                chat_headers["x-vqd-4"] = token
+                chat_headers["Content-Type"] = "application/json"
+                
+                system_prompt = messages[0]["content"]
+                last_msg = messages[-1]["content"]
+                
+                payload = {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": f"{system_prompt}\n\nUser: {last_msg}"}]
+                }
+                
+                resp = await client.post(url, headers=chat_headers, json=payload)
                 if resp.status_code == 200:
-                    return resp.text
-                else:
-                    logger.error(f"Pollinations HTTP {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Pollinations Exception: {e}")
+                    data = resp.text
+                    matches = re.findall(r'"message":"(.*?)"', data)
+                    if matches: return "".join(matches).replace(r'\n', '\n')
+        except: pass
         return ""
 
     @staticmethod
@@ -74,14 +107,17 @@ class ChatManager:
         system_prompt = get_system_prompt(mode)
         
         messages = [{"role": "system", "content": system_prompt}]
-        for msg in history:
-            messages.append(msg)
+        for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        # ЗАПРОС К ИИ
+        # TRY 1
         response_text = await ChatManager.ask_pollinations(messages)
 
-        # Резерв
+        # TRY 2
+        if not response_text:
+            response_text = await ChatManager.ask_duckduckgo(messages)
+
+        # TRY 3
         if not response_text:
             response_text = "Связь с космосом прервана... 🛸"
         else:
