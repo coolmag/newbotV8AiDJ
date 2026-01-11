@@ -10,5 +10,3 @@ psutil
 nest-asyncio
 ytmusicapi
 curl_cffi
-# OFFICIAL AI CLIENTS
-huggingface_hub
