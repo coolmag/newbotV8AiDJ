@@ -12,7 +12,7 @@ const logger = {
         const logLed = document.getElementById('system-log');
         if (logLed) {
             logLed.textContent = msg;
-            logLed.style.color = type === 'error' ? '#f00' : '#00f2ff';
+            logLed.style.color = type === 'error' ? '#ff3333' : '#00f2ff';
         }
     }
 };
@@ -32,7 +32,7 @@ function toggleLoader(show, text = "LOADING...") {
 document.addEventListener('DOMContentLoaded', () => {
     logger.init();
     
-    // Telegram Init
+    // Telegram
     try {
         const tg = window.Telegram?.WebApp;
         if (tg) { 
@@ -64,28 +64,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const startBtn = document.getElementById('btn-start-system');
     const startOverlay = document.getElementById('start-overlay');
     
+    // === FINAL ONE-CLICK FIX ===
     if (startBtn) {
-        // ONE-TOUCH FIX
-        startBtn.onclick = async () => {
-            // 1. Прячем экран сразу
+        startBtn.onclick = () => {
+            // 1. Скрываем экран (визуальный отклик)
             if (startOverlay) startOverlay.style.display = 'none';
 
-            // 2. Будим аудио контекст (ВАЖНО!)
+            // 2. Активируем аудио (системный отклик)
             const audio = Player.getAudioElement();
+            // Пустышка для активации
             if (!audio.src) audio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
             
-            try {
-                await audio.play();
+            audio.play().then(() => {
                 audio.pause();
-                // Инициализируем визуализатор пока ждем сеть
-                Visualizer.initialize(audio);
-            } catch (e) {
-                console.log("Audio kickstart failed:", e);
-            }
-
-            // 3. Грузим контент
-            window.loadGenreHandler('top 50 global hits');
+                // Аудио разблокировано, можно грузить данные
+                startLogic(audio);
+            }).catch(e => {
+                console.warn("Audio autoplay blocked, trying logic anyway:", e);
+                startLogic(audio);
+            });
         };
+    }
+
+    function startLogic(audio) {
+        // Инициализация графики
+        Visualizer.initialize(audio).catch(() => {});
+        // Загрузка контента
+        window.loadGenreHandler('top 50 global hits');
     }
 
     window.loadGenreHandler = async (query) => {
