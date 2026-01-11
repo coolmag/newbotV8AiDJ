@@ -1,7 +1,17 @@
 import logging
+import os
+import random
 import re
 from collections import deque, defaultdict
 import asyncio
+
+# GIGACHAT IMPORT
+try:
+    from gigachat import GigaChat
+    HAS_GIGACHAT = True
+except ImportError:
+    HAS_GIGACHAT = False
+
 import g4f
 from g4f.client import Client as G4FClient
 from ai_personas import get_system_prompt, PERSONAS
@@ -10,6 +20,13 @@ logger = logging.getLogger(__name__)
 
 chat_histories = defaultdict(lambda: deque(maxlen=10))
 chat_modes = defaultdict(lambda: "default")
+
+OFFLINE_ANSWERS = {
+    "default": ["Связь с космосом барахлит...", "Мои нейроны отдыхают.", "Что-то интернет лагает, повтори?"],
+    "toxic": ["Отвали, я занята.", "Ты скучный."],
+    "gop": ["Слыш, связь плохая.", "Че сказал?"],
+    "chill": ["Вайб прерван...", "Космос молчит..."]
+}
 
 class ChatManager:
     @staticmethod
@@ -21,27 +38,12 @@ class ChatManager:
         return False
 
     @staticmethod
-    def get_current_mode(chat_id: int) -> str:
-        return chat_modes[chat_id]
-
-    @staticmethod
     def clean_response(text: str) -> str:
-        """Удаляет рекламу, ссылки и системный мусор."""
         if not text: return ""
-        
-        # 1. Удаляем ссылки (http/https/www)
         text = re.sub(r'http[s]?://\S+', '', text)
-        text = re.sub(r'www\.\S+', '', text)
-        
-        # 2. Удаляем рекламные фразы провайдеров
-        junk_phrases = [
-            "Want best roleplay", "llmplayground", "created by", "OpenAI", 
-            "ChatGPT", "AI language model", "language model"
-        ]
-        for phrase in junk_phrases:
-            text = re.sub(f"(?i){phrase}.*", "", text) # Удаляем фразу и всё после нее
-            
-        # 3. Чистим лишние пробелы
+        junk = ["GigaChat", "Сбер", "AI language model", "OpenAI"]
+        for phrase in junk:
+            text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
     @staticmethod
@@ -50,50 +52,45 @@ class ChatManager:
         history = chat_histories[chat_id]
         
         system_instruction = get_system_prompt(mode)
-        # Добавляем инструкцию "без цензуры и ссылок"
-        system_instruction += " Отвечай коротко (1-2 фразы). Не присылай ссылки. Не говори, что ты ИИ."
         
         messages = [{"role": "system", "content": system_instruction}]
         for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        models_to_try = [
-            "gpt-4o-mini",
-            "gpt-4o", 
-            "blackbox",
-            g4f.models.default
-        ]
+        response_text = ""
+        
+        # 1. GIGACHAT (PRIORITY)
+        giga_key = os.getenv("GIGACHAT_CREDENTIALS")
+        if HAS_GIGACHAT and giga_key:
+            try:
+                def ask_sber():
+                    # scope="GIGACHAT_API_PERS" важен для личных аккаунтов!
+                    with GigaChat(credentials=giga_key, scope="GIGACHAT_API_PERS", verify_ssl_certs=False) as giga:
+                        return giga.chat(messages).choices[0].message.content
+                
+                response_text = await asyncio.get_running_loop().run_in_executor(None, ask_sber)
+            except Exception as e:
+                logger.error(f"GigaChat Error: {e}")
 
-        def ask_g4f():
-            client = G4FClient()
-            for model in models_to_try:
-                try:
-                    response = client.chat.completions.create(
-                        model=model,
-                        messages=messages
-                    )
-                    if response.choices and response.choices[0].message.content:
-                        return response.choices[0].message.content
-                except: continue
-            return None
-
-        response_text = None
-        try:
-            response_text = await asyncio.get_running_loop().run_in_executor(None, ask_g4f)
-        except: pass
-
-        if response_text:
-            # ОЧИСТКА ОТ РЕКЛАМЫ
-            response_text = ChatManager.clean_response(response_text)
-
+        # 2. G4F (BACKUP)
         if not response_text:
-            fallbacks = {
-                "toxic": "Отвали, у меня пинг.",
-                "gop": "Слыш, связь плохая.",
-                "chill": "Космос молчит...",
-                "default": "Что-то помехи. Повтори?"
-            }
-            return fallbacks.get(mode, "...")
+            try:
+                def ask_g4f():
+                    client = G4FClient()
+                    return client.chat.completions.create(
+                        model=g4f.models.gpt_4o_mini,
+                        messages=messages
+                    ).choices[0].message.content
+                
+                response_text = await asyncio.get_running_loop().run_in_executor(None, ask_g4f)
+            except: pass
+
+        # 3. FALLBACK
+        if not response_text:
+            answers = OFFLINE_ANSWERS.get(mode, OFFLINE_ANSWERS["default"])
+            response_text = random.choice(answers)
+        else:
+            response_text = ChatManager.clean_response(response_text)
 
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": response_text})
