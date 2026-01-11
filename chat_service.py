@@ -31,7 +31,7 @@ class ChatManager:
     def set_mode(chat_id: int, mode: str) -> bool:
         chat_modes[chat_id] = mode
         return True
-        
+    
     @staticmethod
     def get_mode(chat_id: int) -> str:
         return chat_modes[chat_id]
