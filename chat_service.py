@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import deque, defaultdict
 import asyncio
 import g4f
@@ -24,61 +25,76 @@ class ChatManager:
         return chat_modes[chat_id]
 
     @staticmethod
+    def clean_response(text: str) -> str:
+        """Удаляет рекламу, ссылки и системный мусор."""
+        if not text: return ""
+        
+        # 1. Удаляем ссылки (http/https/www)
+        text = re.sub(r'http[s]?://\S+', '', text)
+        text = re.sub(r'www\.\S+', '', text)
+        
+        # 2. Удаляем рекламные фразы провайдеров
+        junk_phrases = [
+            "Want best roleplay", "llmplayground", "created by", "OpenAI", 
+            "ChatGPT", "AI language model", "language model"
+        ]
+        for phrase in junk_phrases:
+            text = re.sub(f"(?i){phrase}.*", "", text) # Удаляем фразу и всё после нее
+            
+        # 3. Чистим лишние пробелы
+        return text.strip()
+
+    @staticmethod
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
         
         system_instruction = get_system_prompt(mode)
+        # Добавляем инструкцию "без цензуры и ссылок"
+        system_instruction += " Отвечай коротко (1-2 фразы). Не присылай ссылки. Не говори, что ты ИИ."
         
         messages = [{"role": "system", "content": system_instruction}]
         for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        # БЕЗОПАСНЫЙ СПИСОК МОДЕЛЕЙ (Строками, чтобы не было AttributeError)
         models_to_try = [
             "gpt-4o-mini",
             "gpt-4o", 
             "blackbox",
-            "llama-3.1-70b",
-            g4f.models.default # Самая стандартная модель
+            g4f.models.default
         ]
 
         def ask_g4f():
             client = G4FClient()
             for model in models_to_try:
                 try:
-                    # Пробуем получить ответ
                     response = client.chat.completions.create(
                         model=model,
                         messages=messages
                     )
-                    # Проверяем, что ответ не пустой
                     if response.choices and response.choices[0].message.content:
                         return response.choices[0].message.content
-                except Exception as e:
-                    # Логируем, но не падаем
-                    # print(f"Model {model} failed: {e}") 
-                    continue
+                except: continue
             return None
 
         response_text = None
         try:
             response_text = await asyncio.get_running_loop().run_in_executor(None, ask_g4f)
-        except Exception as e:
-            logger.error(f"Chat Loop Error: {e}")
+        except: pass
+
+        if response_text:
+            # ОЧИСТКА ОТ РЕКЛАМЫ
+            response_text = ChatManager.clean_response(response_text)
 
         if not response_text:
-            # Живые заглушки (Fallback)
             fallbacks = {
-                "toxic": "Отвали, у меня пинг высокий.",
-                "gop": "Слыш, связь плохая, перезвони.",
-                "chill": "Космос сегодня молчит...",
-                "quiz": "Я забыла вопрос. Давай следующий?",
-                "default": "Что-то помехи в эфире. Повтори?"
+                "toxic": "Отвали, у меня пинг.",
+                "gop": "Слыш, связь плохая.",
+                "chill": "Космос молчит...",
+                "default": "Что-то помехи. Повтори?"
             }
             return fallbacks.get(mode, "...")
 
-        # Сохраняем в историю только если ответ был успешным
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": response_text})
         
