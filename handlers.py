@@ -36,12 +36,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     report = ["📊 *System Status Report*"]
     
-    # 1. Server Resources
     mem = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
-    report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}% | Disk {disk.percent}%")
+    report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     
-    # 2. AI Check (Ping OpenRouter)
     try:
         start_ai = time.time()
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -54,21 +51,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         report.append(f"🧠 *AI API:* ❌ Unreachable ({str(e)})")
 
-    # 3. YouTube Check (Real search)
-    try:
-        start_yt = time.time()
-        dl = context.application.downloader
-        # Ищем реальный трек (легкий запрос)
-        tracks = await dl.search("test", limit=1)
-        yt_lat = round((time.time() - start_yt) * 1000)
-        if tracks:
-            report.append(f"🎵 *YouTube:* ✅ Online ({yt_lat}ms)")
-        else:
-            report.append(f"🎵 *YouTube:* ⚠️ Empty Result")
-    except Exception as e:
-        report.append(f"🎵 *YouTube:* ❌ Error ({str(e)})")
-    
-    # 4. Radio State
     active_sessions = len(context.application.radio_manager._sessions)
     report.append(f"📻 *Radio:* {active_sessions} active streams")
     
@@ -123,7 +105,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = context.application.settings
     url = settings.BASE_URL
-    text = "🎧 *Aurora v51*\n\n/radio — Эфир\n/admin — Настройки ИИ\n/status — Диагностика"
+    text = "🎧 *Aurora v53*\n\n/radio — Эфир\n/admin — Настройки ИИ\n/status — Диагностика"
     kb = []
     if url and url.startswith("http"):
         kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
@@ -169,7 +151,9 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_private or is_reply or is_mention:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         user = update.effective_user.first_name
+        
         response = await ChatManager.get_response(chat_id, text, user)
+        logger.info(f"AI Response to {chat_id}: {response}")
         
         try:
             if "{" in response and "command" in response:
@@ -181,7 +165,11 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
         except: pass
 
-        if response and "{" not in response:
+        # Если ответ пустой (ИИ сбойнул), шлем точку
+        if not response or not response.strip():
+            response = "."
+
+        if "{" not in response:
             await update.message.reply_text(response)
 
 async def _send_track(context, chat_id, video_id):
