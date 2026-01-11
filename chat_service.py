@@ -1,7 +1,6 @@
 import logging
 import random
 import re
-import json
 import urllib.parse
 from collections import deque, defaultdict
 import asyncio
@@ -36,12 +35,12 @@ class ChatManager:
     def clean_response(text: str) -> str:
         if not text: return ""
         text = re.sub(r'http[s]?://\S+', '', text)
-        junk = ["Pollinations", "OpenAI", "ChatGPT", "AI model", "Mistral", "language model"]
+        junk = ["Pollinations", "OpenAI", "ChatGPT", "AI model", "language model", "Mistral"]
         for phrase in junk:
             text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
-    # --- 1. POLLINATIONS (MISTRAL MODE) ---
+    # --- POLLINATIONS BYPASS 2026 ---
     @staticmethod
     async def ask_pollinations(messages: list) -> str:
         full_prompt = ""
@@ -50,53 +49,22 @@ class ChatManager:
         
         encoded_prompt = urllib.parse.quote(full_prompt)
         
-        # MISTRAL (Менее загружена)
-        url = f"https://text.pollinations.ai/{encoded_prompt}?model=mistral&seed={random.randint(1, 1000)}"
+        # MISTRAL (Менее загруженная модель) + SEED
+        url = f"https://text.pollinations.ai/{encoded_prompt}?model=mistral&seed={random.randint(1, 99999)}"
         
+        # Заголовки для имитации браузера
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*"
         }
         
         try:
             async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
                 resp = await client.get(url)
-                if resp.status_code == 200: return resp.text
-                else: logger.warning(f"Pollinations Status: {resp.status_code}")
-        except: pass
-        return ""
-
-    # --- 2. DUCKDUCKGO (BACKUP) ---
-    @staticmethod
-    async def ask_duckduckgo(messages: list) -> str:
-        url = "https://duckduckgo.com/duckchat/v1/chat"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://duckduckgo.com/",
-            "x-vqd-accept": "1"
-        }
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                status = await client.get("https://duckduckgo.com/duckchat/v1/status", headers=headers)
-                token = status.headers.get("x-vqd-4")
-                if not token: return ""
-
-                chat_headers = headers.copy()
-                chat_headers["x-vqd-4"] = token
-                chat_headers["Content-Type"] = "application/json"
-                
-                system_prompt = messages[0]["content"]
-                last_msg = messages[-1]["content"]
-                
-                payload = {
-                    "model": "gpt-4o-mini",
-                    "messages": [{"role": "user", "content": f"{system_prompt}\n\nUser: {last_msg}"}]
-                }
-                
-                resp = await client.post(url, headers=chat_headers, json=payload)
                 if resp.status_code == 200:
-                    data = resp.text
-                    matches = re.findall(r'"message":"(.*?)"', data)
-                    if matches: return "".join(matches).replace(r'\n', '\n')
+                    return resp.text
+                else:
+                    logger.warning(f"Pollinations Block: {resp.status_code}")
         except: pass
         return ""
 
@@ -107,19 +75,22 @@ class ChatManager:
         system_prompt = get_system_prompt(mode)
         
         messages = [{"role": "system", "content": system_prompt}]
-        for msg in history: messages.append(msg)
+        for msg in history:
+            messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        # TRY 1
+        # ЗАПРОС
         response_text = await ChatManager.ask_pollinations(messages)
 
-        # TRY 2
+        # РЕЗЕРВ (Если забанили IP)
         if not response_text:
-            response_text = await ChatManager.ask_duckduckgo(messages)
-
-        # TRY 3
-        if not response_text:
-            response_text = "Связь с космосом прервана... 🛸"
+            backups = [
+                "Связь с космосом прервана... 🛸",
+                "Мои серверы перегрелись от твоей крутости! 🔥",
+                "Что-то помехи в эфире, повтори?",
+                "Аврора на связи! (ИИ перезагружается)"
+            ]
+            response_text = random.choice(backups)
         else:
             response_text = ChatManager.clean_response(response_text)
 
