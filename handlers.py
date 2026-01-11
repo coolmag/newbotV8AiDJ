@@ -19,8 +19,8 @@ logger = logging.getLogger("handlers")
 
 # --- ADMIN PANEL ---
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Панель управления ИИ."""
     chat_id = update.effective_chat.id
-    # ИСПРАВЛЕНО: используем метод класса
     current_mode = ChatManager.get_mode(chat_id)
     
     text = (
@@ -32,6 +32,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     row = []
     for mode in PERSONAS.keys():
+        # Добавляем галочку к активному режиму
         btn_text = f"✅ {mode.upper()}" if mode == current_mode else mode.upper()
         row.append(InlineKeyboardButton(btn_text, callback_data=f"set_mode|{mode}"))
         if len(row) == 2:
@@ -40,8 +41,15 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if row: keyboard.append(row)
     
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")])
+    markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+    # ЛОГИКА ОТПРАВКИ:
+    # Если это команда /admin - отправляем новое сообщение
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+    # Если это нажатие кнопки (Callback) - редактируем старое
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -55,25 +63,32 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_mode = data.split("|")[1]
         ChatManager.set_mode(update.effective_chat.id, new_mode)
         
-        # Обновляем меню (чтобы галочка переехала)
-        await query.delete_message()
+        # Обновляем галочку в меню
         await admin_command(update, context)
         
-        # Приветствие
+        # Приветствие в новом режиме (новым сообщением)
         resp = await ChatManager.get_response(update.effective_chat.id, "Привет!", "System")
         if "{" not in resp:
             await context.bot.send_message(update.effective_chat.id, resp)
 
-# ... (Остальные функции без изменений: start, play, radio, stop, skip, player, chat_handler, _send_track, setup_handlers) ...
-# Я их не дублирую, они остаются как в v53, но добавлю полный файл для надежности.
-
+# --- STANDARD COMMANDS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings: Settings = context.application.settings
     url = settings.BASE_URL
-    text = "🎧 *Aurora v47*\n\n/radio — Эфир\n/admin — Настройки ИИ"
+    text = (
+        "🎧 *Aurora System v48*\n\n"
+        "Музыкальный ИИ-Ассистент.\n\n"
+        "/radio — Эфир\n"
+        "/play — Поиск\n"
+        "/admin — Настройки ИИ"
+    )
     kb = []
     if url and url.startswith("http"):
-        kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
+        if update.effective_chat.type == ChatType.PRIVATE:
+            kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
+        else:
+            kb.append([InlineKeyboardButton("🔗 Open Player", url=url)])
+            
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,7 +124,6 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     chat_id = update.effective_chat.id
     
-    # is_quiz = ChatManager.get_mode(chat_id) == "quiz" # Исправил и тут
     is_private = update.effective_chat.type == ChatType.PRIVATE
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
     is_mention = any(w in text.lower() for w in ["аврора", "aurora", "бот", "dj"])
@@ -121,7 +135,8 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             if "{" in response and "command" in response:
-                data = json.loads(response[response.find("{"):response.rfind("}")+1])
+                json_str = response[response.find("{"):response.rfind("}")+1]
+                data = json.loads(json_str)
                 if data.get("command") == "radio":
                     q = data.get("query", "random")
                     await update.message.reply_text(f"🎧 Окей! Ставлю: *{q}*", parse_mode=ParseMode.MARKDOWN)
