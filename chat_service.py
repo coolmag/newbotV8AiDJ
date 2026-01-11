@@ -6,7 +6,6 @@ from ai_personas import get_system_prompt, PERSONAS
 logger = logging.getLogger(__name__)
 
 # Память: словарь, где ключ = chat_id, значение = очередь из 10 последних сообщений
-# deque(maxlen=10) автоматически удаляет старые сообщения
 chat_histories = defaultdict(lambda: deque(maxlen=10))
 
 # Текущий режим для каждого чата
