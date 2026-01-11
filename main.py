@@ -5,59 +5,6 @@ import time
 from datetime import timedelta
 import os
 import json
-import re
-import random
-
-# --- G4F SAFE IMPORT ---
-HAS_G4F = False
-try:
-    import g4f
-    HAS_G4F = True
-except ImportError:
-    print("⚠️ g4f not found. AI features disabled.")
-
-# БЕЗОПАСНАЯ СБОРКА ПРОВАЙДЕРОВ
-POSSIBLE_PROVIDERS = [
-    'GeekGpt', 'GeekGPT', 
-    'Liaobots', 
-    'Blackbox', 
-    'Chatgpt4o', 'ChatgptAi',
-    'FreeGpt'
-]
-
-WORKING_PROVIDERS = []
-if HAS_G4F:
-    for name in POSSIBLE_PROVIDERS:
-        if hasattr(g4f.Provider, name):
-            WORKING_PROVIDERS.append(getattr(g4f.Provider, name))
-
-BACKUP_INTROS = [
-    "В эфире Аврора. Лови волну.",
-    "Специально для тебя — лучший саунд.",
-    "Запускаю музыкальный поток.",
-    "Система готова. Поехали.",
-    "Только хиты, только хардкор.",
-    "Настраиваюсь на твою частоту.",
-    "Отличный выбор. Слушаем.",
-    "Музыка для души и тела.",
-    "Аврора на связи. Включаю.",
-    "Заряжаю позитивом.",
-]
-
-async def get_ai_response(prompt: str) -> str:
-    if not HAS_G4F: return ""
-    providers_to_try = WORKING_PROVIDERS if WORKING_PROVIDERS else [None]
-    for provider in providers_to_try:
-        try:
-            response = await g4f.ChatCompletion.create_async(
-                model=g4f.models.gpt_35_turbo,
-                messages=[{"role": "user", "content": prompt}],
-                provider=provider,
-                timeout=15, 
-            )
-            if response: return str(response)
-        except: continue
-    return ""
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -72,6 +19,7 @@ from radio import RadioManager
 from youtube import YouTubeDownloader
 from handlers import setup_handlers
 from cache_service import CacheService
+from chat_service import ChatManager # ЕДИНЫЙ МОЗГ
 
 logger = logging.getLogger(__name__)
 _start_time = time.time()
@@ -84,12 +32,6 @@ async def lifespan(app: FastAPI):
     logger.info("⚡ Application starting up...")
     try: settings = get_settings()
     except: settings = Settings()
-    
-    # CLEANUP
-    import shutil
-    if os.path.exists(settings.DOWNLOADS_DIR):
-        try: shutil.rmtree(settings.DOWNLOADS_DIR)
-        except: pass
     
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
@@ -119,76 +61,36 @@ async def lifespan(app: FastAPI):
     await tg_app.shutdown()
     await cache.close()
 
-# ИСПРАВЛЕННАЯ СТРОКА
 app = FastAPI(lifespan=lifespan)
-
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
-    logger.info(f"[AI] Request: {prompt}")
+    logger.info(f"[AI] Web Request: {prompt}")
     
-    system_instruction = "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"
-    full_prompt = f"{system_instruction}\n\nЗапрос: {prompt}"
+    # Используем тот же мощный ChatManager, что и в телеграме
+    # Фиктивный chat_id=0 для веб-запросов
+    intro = await ChatManager.get_response(0, f"Подбери музыку: {prompt}. Ответь коротко, как диджей.", "Listener")
+    
+    # Если ответ слишком длинный или пустой, берем заглушку
+    if not intro or len(intro) > 100: 
+        intro = "Отличный выбор! Включаю."
 
-    try:
-        raw_response = await get_ai_response(full_prompt)
-        
-        json_match = re.search(r'{{.*}}', raw_response, re.DOTALL)
-        if json_match:
-            data = json.loads(json_match.group())
-        else:
-            data = {
-                "intro": random.choice(BACKUP_INTROS), 
-                "tracks": [prompt]
-            }
-
-        if not data.get("intro"):
-            data["intro"] = random.choice(BACKUP_INTROS)
-
-        downloader = request.app.state.downloader
-        final_playlist = []
-        
-        tracks = data.get("tracks", [])
-        if not tracks: tracks = [prompt]
-
-        for t in tracks:
-            found = await downloader.search(query=t, limit=1)
-            if found: final_playlist.extend(found)
-            
-        if not final_playlist:
-             final_playlist = await downloader.search(query=prompt, limit=10)
-
-        return {"dj_intro": data["intro"], "playlist": final_playlist}
-
-    except Exception as e:
-        logger.error(f"[AI Error] {e}")
-        downloader = request.app.state.downloader
-        tracks = await downloader.search(query=prompt, limit=10)
-        return {"dj_intro": random.choice(BACKUP_INTROS), "playlist": tracks}
+    downloader = request.app.state.downloader
+    tracks = await downloader.search(query=prompt, limit=10)
+    
+    return {"dj_intro": intro, "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
     downloader = request.app.state.downloader
-    
     path = downloader._find_downloaded_file(video_id)
-    
-    if not path or os.path.exists(str(path) + ".part"):
-        logger.info(f"Downloading {video_id}...")
+    if not path:
         res = await downloader.download(video_id)
-        if res.success and res.file_path:
-            path = res.file_path
-        else:
-            return JSONResponse(status_code=404, content={"error": "Download failed"})
-
-    if path and path.exists() and path.stat().st_size > 1024:
-        return FileResponse(
-            path, 
-            media_type="audio/mpeg", 
-            headers={"Accept-Ranges": "bytes"}
-        )
+        if res.success: path = res.file_path
     
-    return JSONResponse(status_code=404, content={"error": "File lost"})
+    if path: return FileResponse(path)
+    return JSONResponse(status_code=404, content={"error": "File not found"})
 
 @app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}
@@ -202,8 +104,7 @@ async def get_playlist(query: str, request: Request):
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
     tg_app = request.app.state.tg_app
-    try:
-        await tg_app.process_update(Update.de_json(await request.json(), tg_app.bot))
+    try: await tg_app.process_update(Update.de_json(await request.json(), tg_app.bot))
     except: pass
     return {"ok": True}
 

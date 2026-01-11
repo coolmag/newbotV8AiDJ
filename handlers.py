@@ -17,12 +17,16 @@ from ai_personas import PERSONAS
 
 logger = logging.getLogger("handlers")
 
-# --- STANDARD COMMANDS (Без изменений логики) ---
+# --- КОМАНДЫ ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings: Settings = context.application.settings
     url = settings.BASE_URL
-    text = "🎧 *Aurora v42*\n\nЯ тут. Музыка, ИИ, Вайб.\n\n/radio - Поток\n/mode - Личность\n/play - Поиск"
-    
+    text = (
+        "🎧 *Aurora System v42*\n\n"
+        "Я — твой AI-диджей.\n\n"
+        "/radio — Поток\n/mode — Личность\n/play — Поиск"
+    )
     kb = []
     if url and url.startswith("http"):
         if update.effective_chat.type == ChatType.PRIVATE:
@@ -31,6 +35,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb.append([InlineKeyboardButton("🔗 Open Player", url=url)])
             
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
+# ВОТ ОНА, ПОТЕРЯННАЯ ФУНКЦИЯ
+async def player_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    settings: Settings = context.application.settings
+    url = settings.BASE_URL
+    kb = [[InlineKeyboardButton("🔗 Open Player", url=url)]]
+    await update.message.reply_text("👇 Ссылка на плеер:", reply_markup=InlineKeyboardMarkup(kb))
+
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.application.radio_manager.stop(update.effective_chat.id)
+    await update.message.reply_text("🛑 Стоп.")
+
+async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.application.radio_manager.skip(update.effective_chat.id)
 
 async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args)
@@ -49,14 +67,7 @@ async def radio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎲 Настраиваю частоту...")
     asyncio.create_task(context.application.radio_manager.start(update.effective_chat.id, "random"))
 
-async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.application.radio_manager.stop(update.effective_chat.id)
-    await update.message.reply_text("🛑 Стоп.")
-
-async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.application.radio_manager.skip(update.effective_chat.id)
-
-# --- CHAT & AI COMMANDS ---
+# --- CHAT & AI ---
 
 async def set_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -66,7 +77,6 @@ async def set_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = context.args[0].lower()
     if ChatManager.set_mode(update.effective_chat.id, mode):
         await update.message.reply_text(f"✅ Режим: *{mode.upper()}*", parse_mode=ParseMode.MARKDOWN)
-        # Сразу генерируем приветствие
         resp = await ChatManager.get_response(update.effective_chat.id, "Привет!", "System")
         await update.message.reply_text(resp)
     else:
@@ -74,36 +84,27 @@ async def set_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    
     text = update.message.text
     chat_type = update.effective_chat.type
-    bot_name = context.bot.username
     
-    # ЛОГИРОВАНИЕ (Чтобы видеть, что бот слышит)
-    logger.info(f"Incoming msg in {chat_type}: {text}")
+    # Логируем
+    logger.info(f"Msg from {chat_type}: {text}")
 
     should_reply = False
-    
-    # 1. Личка - отвечаем всегда
     if chat_type == ChatType.PRIVATE:
         should_reply = True
-    
-    # 2. Группы - только если позвали
     else:
         is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-        is_mention = ("аврора" in text.lower()) or ("бот" in text.lower()) or (bot_name and f" @{bot_name.lower()}" in text.lower())
+        is_mention = ("аврора" in text.lower()) or ("бот" in text.lower())
         if is_reply or is_mention:
             should_reply = True
 
     if should_reply:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        
         user = update.effective_user.first_name
         response = await ChatManager.get_response(update.effective_chat.id, text, user)
-        
         await update.message.reply_text(response)
 
-# --- HELPERS ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
 
@@ -124,9 +125,8 @@ def setup_handlers(app, radio, settings, downloader):
     app.add_handler(CommandHandler("radio", radio_command))
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("skip", skip_command))
-    app.add_handler(CommandHandler("player", player_command))
+    app.add_handler(CommandHandler("player", player_command)) # Теперь работает
     app.add_handler(CommandHandler("mode", set_mode_command))
     
-    # TEXT HANDLER (В конце, чтобы не перехватывал команды)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
     app.add_handler(CallbackQueryHandler(button_callback))
