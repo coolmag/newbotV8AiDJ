@@ -13,7 +13,6 @@ from telegram.ext import (
 from radio import RadioManager
 from config import Settings
 from youtube import YouTubeDownloader
-# Импорт новых модулей
 from chat_service import ChatManager
 from ai_personas import PERSONAS
 
@@ -25,15 +24,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings: Settings = context.application.settings
     base_url = settings.BASE_URL.strip() if settings.BASE_URL else ""
     
+    # Исправленный текст (без лишних экранирований)
     text = (
         "🎧 *Aurora System v40*\n\n"
-        "Я — твой AI-диджей. Мы можем болтать, слушать музыку и менять вайб.\n\n"
-        "🎛 *Команды:*
-"
+        "Я — твой AI-диджей.\n\n"
+        "Команды:\n"
         "/play <трек> — найти песню\n"
         "/radio — запустить поток\n"
-        "/mode — сменить характер Авроры\n"
-        "/stop — стоп машина"
+        "/mode — сменить характер\n"
+        "/stop — стоп"
     )
     
     keyboard = []
@@ -111,7 +110,11 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     msg = update.message
     text = msg.text.lower()
-    bot_username = context.bot.username.lower() if context.bot.username else "bot"
+    
+    # Безопасное получение имени бота
+    bot_username = "bot"
+    if context.bot.username:
+        bot_username = context.bot.username.lower()
     
     # Условия ответа: ЛС, Реплаи, Упоминание имени
     should_reply = (
@@ -119,7 +122,7 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         (msg.reply_to_message and msg.reply_to_message.from_user.id == context.bot.id) or
         ("аврора" in text) or
         ("бот" in text) or
-        (f" @{bot_username}" in text)
+        (f"@{bot_username}" in text)
     )
 
     if should_reply:
