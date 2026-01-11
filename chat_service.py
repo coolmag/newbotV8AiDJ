@@ -5,33 +5,28 @@ import re
 from collections import deque, defaultdict
 import asyncio
 
-# HUGGING FACE OFFICIAL
+# OFFICIAL HUGGING FACE CLIENT
 try:
     from huggingface_hub import AsyncInferenceClient
     HAS_HF = True
 except ImportError:
     HAS_HF = False
 
-# GIGACHAT
-try:
-    from gigachat import GigaChat
-    HAS_GIGACHAT = True
-except ImportError:
-    HAS_GIGACHAT = False
-
-from ai_personas import get_system_prompt, PERSONAS
-
 logger = logging.getLogger(__name__)
 
 chat_histories = defaultdict(lambda: deque(maxlen=6))
 chat_modes = defaultdict(lambda: "default")
 
-OFFLINE_ANSWERS = {
-    "default": ["Связь с космосом барахлит...", "Мои нейроны отдыхают.", "Что-то интернет лагает, повтори?"],
-    "toxic": ["Отвали, я занята.", "Ты скучный."],
-    "gop": ["Слыш, связь плохая.", "Че сказал?"],
-    "chill": ["Вайб прерван...", "Космос молчит..."]
+PERSONAS = {
+    "default": "Ты DJ Aurora. Веселая, дерзкая. Отвечай кратко, используй эмодзи.",
+    "toxic": "Ты DJ Aurora. Саркастичная и злая. Не любишь глупые вопросы.",
+    "gop": "Ты Аврора с района. Дерзкая, на ты, сленг.",
+    "chill": "Ты Аврора. Спокойная, мягкая, загадочная.",
+    "quiz": "Ты ведущая викторины."
 }
+
+def get_system_prompt(mode):
+    return PERSONAS.get(mode, PERSONAS["default"]) + " (Отвечай на русском языке, максимум 2 предложения)."
 
 class ChatManager:
     @staticmethod
@@ -46,33 +41,38 @@ class ChatManager:
     def clean_response(text: str) -> str:
         if not text: return ""
         text = re.sub(r'http[s]?://\S+', '', text)
-        junk = ["Hugging Face", "Assistant", "AI model", "OpenAI", "ChatGPT"]
+        junk = ["Hugging Face", "Assistant", "AI model", "OpenAI", "ChatGPT", "<|im_end|>", "<|im_start|>"]
         for phrase in junk:
             text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
-    # --- HUGGING FACE API (REAL AI) ---
+    # --- HUGGING FACE INFERENCE ---
     @staticmethod
     async def ask_huggingface(messages: list) -> str:
         token = os.getenv("HF_TOKEN")
-        # Используем Qwen 2.5 (очень умная и открытая)
+        if not token or not HAS_HF: 
+            return "" # Нет ключа - молчим (или фолбэк)
+
+        # Qwen 2.5 72B - Топовая модель, доступная бесплатно
         model = "Qwen/Qwen2.5-72B-Instruct"
         
         try:
             client = AsyncInferenceClient(token=token)
             
-            # Преобразуем сообщения
+            # Формируем промпт в формате ChatML (Qwen это любит)
             prompt = ""
             for m in messages:
-                role = "user" if m["role"] == "user" else "system"
-                prompt += f"<|im_start|>{role}\n{m['content']}<|im_end|>\n"
+                role = m["role"]
+                content = m["content"]
+                prompt += f"<|im_start|>{role}\n{content}<|im_end|>\n"
             prompt += "<|im_start|>assistant\n"
 
             response = await client.text_generation(
                 prompt, 
                 model=model, 
                 max_new_tokens=150, 
-                temperature=0.7
+                temperature=0.7,
+                stop_sequences=["<|im_end|>"]
             )
             return response
         except Exception as e:
@@ -83,31 +83,25 @@ class ChatManager:
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
+        
         system_instruction = get_system_prompt(mode)
         
         messages = [{"role": "system", "content": system_instruction}]
-        for msg in history: messages.append(msg)
+        for msg in history:
+            messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        response_text = ""
-        
-        # 1. GIGACHAT (Если настроен)
-        if HAS_GIGACHAT and os.getenv("GIGACHAT_CREDENTIALS"):
-            try:
-                def ask_sber():
-                    with GigaChat(credentials=os.getenv("GIGACHAT_CREDENTIALS"), verify_ssl_certs=False) as giga:
-                        return giga.chat(messages).choices[0].message.content
-                response_text = await asyncio.get_running_loop().run_in_executor(None, ask_sber)
-            except: pass
+        # ЗАПРОС К HUGGING FACE
+        response_text = await ChatManager.ask_huggingface(messages)
 
-        # 2. HUGGING FACE (Основной рабочий вариант)
-        if not response_text and HAS_HF:
-            response_text = await ChatManager.ask_huggingface(messages)
-
-        # 3. FALLBACK
+        # FALLBACK (Если ключа нет или лимит)
         if not response_text:
-            answers = OFFLINE_ANSWERS.get(mode, OFFLINE_ANSWERS["default"])
-            response_text = random.choice(answers)
+            backups = [
+                "Связь с космосом прервана... 🛸",
+                "Мои нейроны отдыхают, лови вайб! 🎧",
+                "Аврора на связи! (Перезагрузка)"
+            ]
+            response_text = random.choice(backups)
         else:
             response_text = ChatManager.clean_response(response_text)
 
