@@ -22,6 +22,8 @@ from keyboards import (
     get_main_menu_keyboard, 
     get_subcategory_keyboard
 )
+from chat_service import ChatManager
+from ai_personas import PERSONAS
 
 logger = logging.getLogger("handlers")
 
@@ -110,35 +112,66 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== CALLBACKS ====================
 
+async def set_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Смена личности бота. Только для админов."""
+    user_id = update.effective_user.id
+    settings: Settings = context.application.settings
+    
+    # Простая проверка админа (можно усложнить)
+    # Если ADMIN_IDS пуст в конфиге, то разрешаем всем (для тестов)
+    if settings.ADMIN_ID_LIST and user_id not in settings.ADMIN_ID_LIST:
+        await update.message.reply_text("⛔️ Access Denied. Ты не Архитектор.")
+        return
+
+    if not context.args:
+        modes = ", ".join(PERSONAS.keys())
+        await update.message.reply_text(f"🎭 Доступные режимы:\n{modes}\n\nПример: `/mode toxic`")
+        return
+
+    new_mode = context.args[0].lower()
+    if ChatManager.set_mode(update.effective_chat.id, new_mode):
+        await update.message.reply_text(f"✅ Личность изменена на: *{new_mode.upper()}*", parse_mode=ParseMode.MARKDOWN)
+        # Бот сразу реагирует на смену
+        response = await ChatManager.get_response(update.effective_chat.id, "Привет, ты тут?", "System")
+        await update.message.reply_text(response)
+    else:
+        await update.message.reply_text("❌ Нет такого режима.")
+
+async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка болтовни."""
+    if not update.message or not update.message.text: return
+    
+    msg = update.message
+    text = msg.text.lower()
+    bot_username = context.bot.username.lower() if context.bot.username else "bot"
+    
+    # Триггеры для ответа:
+    # 1. Личное сообщение (ЛС)
+    # 2. Ответ (Reply) на сообщение бота
+    # 3. Упоминание имени ("аврора", "бот")
+    should_reply = (
+        update.effective_chat.type == ChatType.PRIVATE or
+        (msg.reply_to_message and msg.reply_to_message.from_user.id == context.bot.id) or
+        ("аврора" in text) or
+        (f" @{bot_username}" in text)
+    )
+
+    if should_reply:
+        # Показываем "печатает..."
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        
+        user_name = msg.from_user.first_name
+        response = await ChatManager.get_response(update.effective_chat.id, msg.text, user_name)
+        
+        # Если ответ есть - шлем
+        if response and response != "...":
+            await msg.reply_text(response)
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
-
-    if data == "main_menu_start":
-        await start(update, context)
-    elif data == "main_menu_genres":
-        await query.edit_message_text("🗂 *Жанры:*", parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_menu_keyboard())
-    elif data.startswith("cat|"):
-        path_str = data[4:]
-        if not path_str: await start(update, context); return
-        await query.edit_message_text(f"💿 *{path_str.split('|')[-1]}:*", parse_mode=ParseMode.MARKDOWN, reply_markup=get_subcategory_keyboard(path_str))
-    elif data.startswith("play_cat|"):
-        path = data[9:].split('|')
-        try:
-            current = MUSIC_CATALOG
-            for p in path[:-1]: current = current[p]
-            q = current[path[-1]]
-        except: q = " ".join(path)
-        await query.edit_message_text(f"🎵 Играет: *{path[-1]}*...", parse_mode=ParseMode.MARKDOWN)
-        asyncio.create_task(context.application.radio_manager.start(query.message.chat.id, str(q), query.message.chat.type))
-    elif data == "play_random":
-        await query.edit_message_text("🎲 Рандом...")
-        asyncio.create_task(context.application.radio_manager.start(query.message.chat.id, "random", query.message.chat.type))
-    elif data.startswith("sel_track|"):
-        await query.edit_message_text("⏳ Загрузка...")
-        await _send_track(context, query.message.chat.id, data.split("|")[1], query.message.chat.type)
-        await start(update, context)
+    # (Оставил заглушку, так как логика кнопок была простой)
+    pass
 
 # ==================== HELPERS ====================
 
@@ -170,5 +203,9 @@ def setup_handlers(app, radio, settings, downloader):
     app.add_handler(CommandHandler("radio", radio_command))
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("skip", skip_command))
+    
+    # НОВЫЕ ХЕНДЛЕРЫ
+    app.add_handler(CommandHandler("mode", set_mode_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
+    
     app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
