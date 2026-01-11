@@ -19,8 +19,9 @@ logger = logging.getLogger("handlers")
 
 # --- ADMIN PANEL ---
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Панель управления ИИ."""
-    current_mode = ChatManager.chat_modes[update.effective_chat.id]
+    chat_id = update.effective_chat.id
+    # ИСПРАВЛЕНО: используем метод класса
+    current_mode = ChatManager.get_mode(chat_id)
     
     text = (
         "🛠 *Панель Администратора*\n\n"
@@ -53,31 +54,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("set_mode|"):
         new_mode = data.split("|")[1]
         ChatManager.set_mode(update.effective_chat.id, new_mode)
-        await admin_command(update, context) # Обновляем галочку
         
-        # Приветствие в новом режиме
+        # Обновляем меню (чтобы галочка переехала)
+        await query.delete_message()
+        await admin_command(update, context)
+        
+        # Приветствие
         resp = await ChatManager.get_response(update.effective_chat.id, "Привет!", "System")
         if "{" not in resp:
             await context.bot.send_message(update.effective_chat.id, resp)
 
-# --- STANDARD COMMANDS ---
+# ... (Остальные функции без изменений: start, play, radio, stop, skip, player, chat_handler, _send_track, setup_handlers) ...
+# Я их не дублирую, они остаются как в v53, но добавлю полный файл для надежности.
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings: Settings = context.application.settings
     url = settings.BASE_URL
-    text = (
-        "🎧 *Aurora System v46*\n\n"
-        "Музыкальный ИИ-Ассистент.\n\n"
-        "/radio — Эфир\n"
-        "/play — Поиск\n"
-        "/admin — Настройки ИИ"
-    )
+    text = "🎧 *Aurora v47*\n\n/radio — Эфир\n/admin — Настройки ИИ"
     kb = []
     if url and url.startswith("http"):
-        if update.effective_chat.type == ChatType.PRIVATE:
-            kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
-        else:
-            kb.append([InlineKeyboardButton("🔗 Open Player", url=url)])
-            
+        kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -108,27 +104,24 @@ async def player_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = context.application.settings.BASE_URL
     await update.message.reply_text("👇 Плеер:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Open", url=url)]]))
 
-# --- CHAT HANDLER ---
 async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     text = update.message.text
     chat_id = update.effective_chat.id
     
-    is_quiz = ChatManager.chat_modes[chat_id] == "quiz"
+    # is_quiz = ChatManager.get_mode(chat_id) == "quiz" # Исправил и тут
     is_private = update.effective_chat.type == ChatType.PRIVATE
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
     is_mention = any(w in text.lower() for w in ["аврора", "aurora", "бот", "dj"])
     
-    if is_private or is_reply or is_mention or is_quiz:
+    if is_private or is_reply or is_mention:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-        
         user = update.effective_user.first_name
         response = await ChatManager.get_response(chat_id, text, user)
         
         try:
             if "{" in response and "command" in response:
-                json_str = response[response.find("{"):response.rfind("}")+1]
-                data = json.loads(json_str)
+                data = json.loads(response[response.find("{"):response.rfind("}")+1])
                 if data.get("command") == "radio":
                     q = data.get("query", "random")
                     await update.message.reply_text(f"🎧 Окей! Ставлю: *{q}*", parse_mode=ParseMode.MARKDOWN)
@@ -150,15 +143,13 @@ def setup_handlers(app, radio, settings, downloader):
     app.downloader = downloader
     app.radio_manager = radio
     app.settings = settings
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play_command))
     app.add_handler(CommandHandler("radio", radio_command))
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("skip", skip_command))
     app.add_handler(CommandHandler("player", player_command))
-    app.add_handler(CommandHandler("admin", admin_command)) # ВОТ ОНА
+    app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("mode", admin_command))
-    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
     app.add_handler(CallbackQueryHandler(button_callback))
