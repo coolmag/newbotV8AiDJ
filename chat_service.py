@@ -1,29 +1,27 @@
 import logging
-import os
-import random # ВОТ ЧЕГО НЕ ХВАТАЛО
+import random
 import re
 import json
+import urllib.parse
 from collections import deque, defaultdict
 import asyncio
-import httpx 
-
-from ai_personas import get_system_prompt, PERSONAS
+import httpx # Для запросов
 
 logger = logging.getLogger(__name__)
 
-chat_histories = defaultdict(lambda: deque(maxlen=10))
+chat_histories = defaultdict(lambda: deque(maxlen=6))
 chat_modes = defaultdict(lambda: "default")
 
-OFFLINE_ANSWERS = {
-    "default": [
-        "Связь с космосом барахлит, но музыка играет! 🎧", 
-        "Мои нейроны перезагружаются, лови ритм!", 
-        "Что-то интернет лагает, давай лучше танцевать!",
-        "Аврора на связи! (ИИ перезагружается ⚙️)"
-    ],
-    "toxic": ["Отвали, я занята.", "Пинг высокий, иди гуляй."],
-    "gop": ["Слыш, связь плохая.", "Че сказал? Не слышу."]
+PERSONAS = {
+    "default": "Ты DJ Aurora. Веселая, дерзкая радиоведущая. Твои ответы короткие и с юмором. Ты обожаешь музыку. Используй эмодзи.",
+    "toxic": "Ты DJ Aurora. Ты саркастичная и язвительная. Ты считаешь вкусы людей ужасными.",
+    "gop": "Ты Аврора. Говоришь на уличном сленге, дерзко, 'тыкаешь'.",
+    "chill": "Ты Аврора. Спокойная, мягкая, загадочная.",
+    "quiz": "Ты ведущая викторины."
 }
+
+def get_system_prompt(mode):
+    return PERSONAS.get(mode, PERSONAS["default"]) + " (Отвечай на русском языке, максимум 2 предложения)."
 
 class ChatManager:
     @staticmethod
@@ -38,77 +36,54 @@ class ChatManager:
     def clean_response(text: str) -> str:
         if not text: return ""
         text = re.sub(r'http[s]?://\S+', '', text)
-        text = re.sub(r'\*\*.*?\*\*', '', text)
-        junk = ["OpenAI", "ChatGPT", "Claude", "DuckDuckGo", "AI model", "language model"]
+        junk = ["Pollinations", "OpenAI", "ChatGPT", "AI model", "language model"]
         for phrase in junk:
             text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
+    # --- POLLINATIONS GEN API (2026 STABLE) ---
     @staticmethod
-    async def ask_duckduckgo(messages: list) -> str:
-        url = "https://duckduckgo.com/duckchat/v1/chat"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://duckduckgo.com/",
-            "Origin": "https://duckduckgo.com",
-            "x-vqd-accept": "1"
-        }
+    async def ask_pollinations(messages: list) -> str:
+        # Мы используем метод GET, так как он самый надежный для этого API
+        # Собираем промпт
+        full_prompt = ""
+        for msg in messages:
+            full_prompt += f"{msg['role']}: {msg['content']}\n"
+        
+        # Кодируем для URL
+        encoded_prompt = urllib.parse.quote(full_prompt)
+        
+        # Новый эндпоинт (text.pollinations.ai/PROMPT)
+        url = f"https://text.pollinations.ai/{encoded_prompt}?model=openai&seed={random.randint(1, 1000)}"
         
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client: # Таймаут 10 сек
-                status = await client.get("https://duckduckgo.com/duckchat/v1/status", headers=headers)
-                token = status.headers.get("x-vqd-4")
-                if not token: return ""
-
-                chat_headers = headers.copy()
-                chat_headers["x-vqd-4"] = token
-                chat_headers["Content-Type"] = "application/json"
-                
-                system_prompt = messages[0]["content"]
-                last_msg = messages[-1]["content"]
-                
-                payload = {
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {"role": "user", "content": f"{system_prompt}\n\nUser: {last_msg}"}
-                    ]
-                }
-                
-                resp = await client.post(url, headers=chat_headers, json=payload)
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                resp = await client.get(url)
                 if resp.status_code == 200:
-                    data = resp.text
-                    full_text = ""
-                    # Парсинг SSE
-                    for line in data.split('\n'):
-                        if 'data: ' in line:
-                            try:
-                                json_part = json.loads(line.replace('data: ', ''))
-                                if 'message' in json_part:
-                                    full_text += json_part['message']
-                            except: pass
-                    return full_text
+                    return resp.text
+                else:
+                    logger.error(f"Pollinations HTTP {resp.status_code}")
         except Exception as e:
-            logger.error(f"DDG Error: {e}")
+            logger.error(f"Pollinations Exception: {e}")
         return ""
 
     @staticmethod
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
+        system_prompt = get_system_prompt(mode)
         
-        system_instruction = get_system_prompt(mode)
-        
-        messages = [{"role": "system", "content": system_instruction}]
-        for msg in history: messages.append(msg)
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in history:
+            messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        # ЗАПРОС К DDG
-        response_text = await ChatManager.ask_duckduckgo(messages)
+        # ЗАПРОС К ИИ
+        response_text = await ChatManager.ask_pollinations(messages)
 
-        # ЗАГЛУШКА
+        # Резерв
         if not response_text:
-            answers = OFFLINE_ANSWERS.get(mode, OFFLINE_ANSWERS["default"])
-            response_text = random.choice(answers)
+            response_text = "Связь с космосом прервана... 🛸"
         else:
             response_text = ChatManager.clean_response(response_text)
 
