@@ -10,3 +10,5 @@ psutil
 nest-asyncio
 ytmusicapi
 curl_cffi
+gigachat
+g4f==0.3.2.8
