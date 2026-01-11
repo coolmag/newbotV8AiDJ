@@ -1,120 +1,113 @@
 import logging
+import os
 import random
 import re
-import json
 from collections import deque, defaultdict
 import asyncio
-import httpx 
+
+# HUGGING FACE OFFICIAL
+try:
+    from huggingface_hub import AsyncInferenceClient
+    HAS_HF = True
+except ImportError:
+    HAS_HF = False
+
+# GIGACHAT
+try:
+    from gigachat import GigaChat
+    HAS_GIGACHAT = True
+except ImportError:
+    HAS_GIGACHAT = False
+
+from ai_personas import get_system_prompt, PERSONAS
 
 logger = logging.getLogger(__name__)
 
 chat_histories = defaultdict(lambda: deque(maxlen=6))
 chat_modes = defaultdict(lambda: "default")
 
-PERSONAS = {
-    "default": "Ты DJ Aurora. Веселая, дерзкая радиоведущая. Твои ответы короткие и с юмором. Ты обожаешь музыку. Используй эмодзи.",
-    "toxic": "Ты DJ Aurora. Ты саркастичная и язвительная. Ты считаешь вкусы людей ужасными.",
-    "gop": "Ты Аврора. Говоришь на уличном сленге, дерзко, 'тыкаешь'.",
-    "chill": "Ты Аврора. Спокойная, мягкая, загадочная.",
-    "quiz": "Ты ведущая викторины."
+OFFLINE_ANSWERS = {
+    "default": ["Связь с космосом барахлит...", "Мои нейроны отдыхают.", "Что-то интернет лагает, повтори?"],
+    "toxic": ["Отвали, я занята.", "Ты скучный."],
+    "gop": ["Слыш, связь плохая.", "Че сказал?"],
+    "chill": ["Вайб прерван...", "Космос молчит..."]
 }
-
-def get_system_prompt(mode):
-    return PERSONAS.get(mode, PERSONAS["default"]) + " (Отвечай на русском языке, максимум 2 предложения)."
 
 class ChatManager:
     @staticmethod
     def set_mode(chat_id: int, mode: str) -> bool:
-        chat_modes[chat_id] = mode
-        chat_histories[chat_id].clear()
-        return True
+        if mode in PERSONAS:
+            chat_modes[chat_id] = mode
+            chat_histories[chat_id].clear()
+            return True
+        return False
 
     @staticmethod
     def clean_response(text: str) -> str:
         if not text: return ""
         text = re.sub(r'http[s]?://\S+', '', text)
-        junk = ["OpenAI", "ChatGPT", "Claude", "DuckDuckGo", "AI model", "language model"]
+        junk = ["Hugging Face", "Assistant", "AI model", "OpenAI", "ChatGPT"]
         for phrase in junk:
             text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
-    # --- DUCKDUCKGO (The Reliable Choice) ---
+    # --- HUGGING FACE API (REAL AI) ---
     @staticmethod
-    async def ask_duckduckgo(messages: list) -> str:
-        # Эндпоинт чата
-        url_status = "https://duckduckgo.com/duckchat/v1/status"
-        url_chat = "https://duckduckgo.com/duckchat/v1/chat"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://duckduckgo.com/",
-            "x-vqd-accept": "1"
-        }
+    async def ask_huggingface(messages: list) -> str:
+        token = os.getenv("HF_TOKEN")
+        # Используем Qwen 2.5 (очень умная и открытая)
+        model = "Qwen/Qwen2.5-72B-Instruct"
         
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                # 1. Получаем токен сессии (VQD)
-                status_resp = await client.get(url_status, headers=headers)
-                vqd = status_resp.headers.get("x-vqd-4")
-                
-                if not vqd: return ""
+            client = AsyncInferenceClient(token=token)
+            
+            # Преобразуем сообщения
+            prompt = ""
+            for m in messages:
+                role = "user" if m["role"] == "user" else "system"
+                prompt += f"<|im_start|>{role}\n{m['content']}<|im_end|>\n"
+            prompt += "<|im_start|>assistant\n"
 
-                # 2. Шлем сообщение
-                chat_headers = headers.copy()
-                chat_headers["x-vqd-4"] = vqd
-                chat_headers["Content-Type"] = "application/json"
-                
-                # Формируем промпт из истории
-                full_context = ""
-                for m in messages:
-                    full_context += f"{m['role']}: {m['content']}\n"
-                
-                payload = {
-                    "model": "gpt-4o-mini",
-                    "messages": [{"role": "user", "content": full_context}]
-                }
-                
-                resp = await client.post(url_chat, headers=chat_headers, json=payload)
-                
-                if resp.status_code == 200:
-                    data = resp.text
-                    # Ответ приходит стримом (SSE), собираем текст
-                    text_parts = []
-                    for line in data.split('\n'):
-                        if 'data: ' in line:
-                            try:
-                                json_part = json.loads(line.replace('data: ', ''))
-                                if 'message' in json_part:
-                                    text_parts.append(json_part['message'])
-                            except: pass
-                    return "".join(text_parts)
-                    
+            response = await client.text_generation(
+                prompt, 
+                model=model, 
+                max_new_tokens=150, 
+                temperature=0.7
+            )
+            return response
         except Exception as e:
-            logger.error(f"DDG Error: {e}")
+            logger.error(f"HF Error: {e}")
         return ""
 
     @staticmethod
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
-        system_prompt = get_system_prompt(mode)
+        system_instruction = get_system_prompt(mode)
         
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [{"role": "system", "content": system_instruction}]
         for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        # ЗАПРОС
-        response_text = await ChatManager.ask_duckduckgo(messages)
+        response_text = ""
+        
+        # 1. GIGACHAT (Если настроен)
+        if HAS_GIGACHAT and os.getenv("GIGACHAT_CREDENTIALS"):
+            try:
+                def ask_sber():
+                    with GigaChat(credentials=os.getenv("GIGACHAT_CREDENTIALS"), verify_ssl_certs=False) as giga:
+                        return giga.chat(messages).choices[0].message.content
+                response_text = await asyncio.get_running_loop().run_in_executor(None, ask_sber)
+            except: pass
 
-        # РЕЗЕРВ
+        # 2. HUGGING FACE (Основной рабочий вариант)
+        if not response_text and HAS_HF:
+            response_text = await ChatManager.ask_huggingface(messages)
+
+        # 3. FALLBACK
         if not response_text:
-            backups = [
-                "Связь с космосом прервана... 🛸",
-                "Мои нейроны отдыхают, лови вайб! 🎧",
-                "Что-то не слышу, повтори?",
-                "Аврора на связи! (Перезагрузка)"
-            ]
-            response_text = random.choice(backups)
+            answers = OFFLINE_ANSWERS.get(mode, OFFLINE_ANSWERS["default"])
+            response_text = random.choice(answers)
         else:
             response_text = ChatManager.clean_response(response_text)
 
