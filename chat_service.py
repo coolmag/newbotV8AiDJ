@@ -27,49 +27,58 @@ class ChatManager:
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
+        
         system_instruction = get_system_prompt(mode)
         
         messages = [{"role": "system", "content": system_instruction}]
         for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        response_text = ""
-
-        # G4F POOL (Бесплатные и доступные)
-        # Мы пробуем несколько моделей, так как провайдеры могут отваливаться
+        # БЕЗОПАСНЫЙ СПИСОК МОДЕЛЕЙ (Строками, чтобы не было AttributeError)
         models_to_try = [
-            g4f.models.gpt_4o_mini, # Обычно самый быстрый
-            g4f.models.llama_3_1_70b,
-            g4f.models.blackbox,    # Надежный
+            "gpt-4o-mini",
+            "gpt-4o", 
+            "blackbox",
+            "llama-3.1-70b",
+            g4f.models.default # Самая стандартная модель
         ]
 
         def ask_g4f():
             client = G4FClient()
             for model in models_to_try:
                 try:
+                    # Пробуем получить ответ
                     response = client.chat.completions.create(
                         model=model,
                         messages=messages
                     )
-                    if response.choices[0].message.content:
+                    # Проверяем, что ответ не пустой
+                    if response.choices and response.choices[0].message.content:
                         return response.choices[0].message.content
-                except: continue
+                except Exception as e:
+                    # Логируем, но не падаем
+                    # print(f"Model {model} failed: {e}") 
+                    continue
             return None
 
+        response_text = None
         try:
             response_text = await asyncio.get_running_loop().run_in_executor(None, ask_g4f)
         except Exception as e:
-            logger.error(f"Chat AI Error: {e}")
+            logger.error(f"Chat Loop Error: {e}")
 
         if not response_text:
-            # Саркастичные заглушки, если ИИ умер
+            # Живые заглушки (Fallback)
             fallbacks = {
-                "toxic": "Мой интеллект слишком высок для твоих вопросов.",
-                "gop": "Слыш, сеть не ловит.",
-                "default": "Что-то помехи в эфире... Повтори?"
+                "toxic": "Отвали, у меня пинг высокий.",
+                "gop": "Слыш, связь плохая, перезвони.",
+                "chill": "Космос сегодня молчит...",
+                "quiz": "Я забыла вопрос. Давай следующий?",
+                "default": "Что-то помехи в эфире. Повтори?"
             }
             return fallbacks.get(mode, "...")
 
+        # Сохраняем в историю только если ответ был успешным
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": response_text})
         
