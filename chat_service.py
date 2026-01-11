@@ -1,12 +1,11 @@
 import logging
+import os
+import random # ВОТ ЧЕГО НЕ ХВАТАЛО
 import re
 import json
 from collections import deque, defaultdict
 import asyncio
-import httpx # Прямой HTTP клиент
-
-# Импорт g4f убираем, он нестабилен
-# from g4f.client import Client as G4FClient
+import httpx 
 
 from ai_personas import get_system_prompt, PERSONAS
 
@@ -19,7 +18,8 @@ OFFLINE_ANSWERS = {
     "default": [
         "Связь с космосом барахлит, но музыка играет! 🎧", 
         "Мои нейроны перезагружаются, лови ритм!", 
-        "Что-то интернет лагает, давай лучше танцевать!"
+        "Что-то интернет лагает, давай лучше танцевать!",
+        "Аврора на связи! (ИИ перезагружается ⚙️)"
     ],
     "toxic": ["Отвали, я занята.", "Пинг высокий, иди гуляй."],
     "gop": ["Слыш, связь плохая.", "Че сказал? Не слышу."]
@@ -38,12 +38,12 @@ class ChatManager:
     def clean_response(text: str) -> str:
         if not text: return ""
         text = re.sub(r'http[s]?://\S+', '', text)
+        text = re.sub(r'\*\*.*?\*\*', '', text)
         junk = ["OpenAI", "ChatGPT", "Claude", "DuckDuckGo", "AI model", "language model"]
         for phrase in junk:
             text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
-    # --- DUCKDUCKGO DIRECT API (STABLE FREE) ---
     @staticmethod
     async def ask_duckduckgo(messages: list) -> str:
         url = "https://duckduckgo.com/duckchat/v1/chat"
@@ -55,19 +55,15 @@ class ChatManager:
         }
         
         try:
-            async with httpx.AsyncClient() as client:
-                # 1. Получаем VQD токен
-                vqd_resp = await client.get("https://duckduckgo.com/duckchat/v1/status", headers={"x-vqd-accept": "1"})
-                vqd_token = vqd_resp.headers.get("x-vqd-4")
-                
-                if not vqd_token: return ""
+            async with httpx.AsyncClient(timeout=10.0) as client: # Таймаут 10 сек
+                status = await client.get("https://duckduckgo.com/duckchat/v1/status", headers=headers)
+                token = status.headers.get("x-vqd-4")
+                if not token: return ""
 
-                # 2. Чат
                 chat_headers = headers.copy()
-                chat_headers["x-vqd-4"] = vqd_token
+                chat_headers["x-vqd-4"] = token
                 chat_headers["Content-Type"] = "application/json"
                 
-                # Формируем контекст
                 system_prompt = messages[0]["content"]
                 last_msg = messages[-1]["content"]
                 
@@ -81,8 +77,8 @@ class ChatManager:
                 resp = await client.post(url, headers=chat_headers, json=payload)
                 if resp.status_code == 200:
                     data = resp.text
-                    # Парсинг SSE (Server-Sent Events)
                     full_text = ""
+                    # Парсинг SSE
                     for line in data.split('\n'):
                         if 'data: ' in line:
                             try:
@@ -99,16 +95,17 @@ class ChatManager:
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
+        
         system_instruction = get_system_prompt(mode)
         
         messages = [{"role": "system", "content": system_instruction}]
         for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        # ЗАПРОС
+        # ЗАПРОС К DDG
         response_text = await ChatManager.ask_duckduckgo(messages)
 
-        # FALLBACK
+        # ЗАГЛУШКА
         if not response_text:
             answers = OFFLINE_ANSWERS.get(mode, OFFLINE_ANSWERS["default"])
             response_text = random.choice(answers)
