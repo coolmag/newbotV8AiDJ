@@ -27,10 +27,15 @@ chat_histories = defaultdict(lambda: deque(maxlen=6))
 chat_modes = defaultdict(lambda: "default")
 
 OFFLINE_ANSWERS = {
-    "default": ["Связь с космосом барахлит...", "Мои нейроны отдыхают.", "Аврора на связи! (Перезагрузка)"],
-    "toxic": ["Отвали, я занята.", "Скучно."],
-    "gop": ["Слыш, связь плохая.", "Че сказал?"],
-    "chill": ["Вайб прерван...", "Космос молчит..."]
+    "default": [
+        "Связь с космосом барахлит... 🛸",
+        "Мои нейроны отдыхают, лови вайб! 🎧",
+        "Аврора на связи! (Перезагрузка ⚙️)",
+        "Что-то интернет лагает, повтори?"
+    ],
+    "toxic": ["Отвали, я занята.", "Скучно.", "Не беси меня."],
+    "gop": ["Слыш, связь плохая.", "Че сказал?", "Погодь, ща трек доиграет."],
+    "chill": ["Вайб прерван... помехи...", "Космос молчит...", "Просто наслаждайся..."]
 }
 
 class ChatManager:
@@ -51,28 +56,31 @@ class ChatManager:
             text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
-    # --- HUGGING FACE CHAT (CORRECT METHOD) ---
+    # --- HUGGING FACE INFERENCE ---
     @staticmethod
     async def ask_huggingface(messages: list) -> str:
         token = os.getenv("HF_TOKEN")
         if not token or not HAS_HF: return ""
 
-        # Qwen 2.5 72B - Топовая модель
         model = "Qwen/Qwen2.5-72B-Instruct"
         
         try:
-            client = AsyncInferenceClient(token=token)
+            # Увеличиваем таймаут до 25 сек (Qwen 72B большая)
+            client = AsyncInferenceClient(token=token, timeout=25.0)
             
-            # Используем правильный метод chat_completion
             response = await client.chat_completion(
                 messages=messages, 
                 model=model, 
                 max_tokens=150, 
-                temperature=0.7
+                temperature=0.8
             )
             
+            content = ""
             if response.choices and response.choices[0].message:
-                return response.choices[0].message.content
+                content = response.choices[0].message.content
+            
+            logger.info(f"HF Response len: {len(content)}")
+            return content
                 
         except Exception as e:
             logger.error(f"HF Error: {e}")
@@ -84,7 +92,6 @@ class ChatManager:
         history = chat_histories[chat_id]
         system_instruction = get_system_prompt(mode)
         
-        # Формируем сообщения для Chat API
         messages = [{"role": "system", "content": system_instruction}]
         for msg in history:
             messages.append(msg)
@@ -92,7 +99,7 @@ class ChatManager:
 
         response_text = ""
         
-        # 1. GIGACHAT
+        # 1. GIGACHAT (Если есть)
         if HAS_GIGACHAT and os.getenv("GIGACHAT_CREDENTIALS"):
             try:
                 def ask_sber():
@@ -105,8 +112,8 @@ class ChatManager:
         if not response_text and HAS_HF:
             response_text = await ChatManager.ask_huggingface(messages)
 
-        # 3. FALLBACK
-        if not response_text:
+        # 3. FALLBACK (ГАРАНТИРОВАННЫЙ ОТВЕТ)
+        if not response_text or len(response_text.strip()) < 2:
             answers = OFFLINE_ANSWERS.get(mode, OFFLINE_ANSWERS["default"])
             response_text = random.choice(answers)
         else:
