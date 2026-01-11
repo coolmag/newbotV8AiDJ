@@ -51,19 +51,19 @@ class ChatManager:
             text = re.sub(f"(?i){phrase}", "Aurora", text)
         return text.strip()
 
-    # --- HUGGING FACE INFERENCE (STABLE MODEL) ---
+    # --- HUGGING FACE CHAT (CORRECT METHOD) ---
     @staticmethod
     async def ask_huggingface(messages: list) -> str:
         token = os.getenv("HF_TOKEN")
         if not token or not HAS_HF: return ""
 
-        # Берем Llama-3 (она самая стабильная на бесплатном тире)
-        model = "meta-llama/Meta-Llama-3-8B-Instruct"
+        # Qwen 2.5 72B - Топовая модель
+        model = "Qwen/Qwen2.5-72B-Instruct"
         
         try:
             client = AsyncInferenceClient(token=token)
             
-            # Используем новый метод chat_completion (он надежнее)
+            # Используем правильный метод chat_completion
             response = await client.chat_completion(
                 messages=messages, 
                 model=model, 
@@ -84,7 +84,7 @@ class ChatManager:
         history = chat_histories[chat_id]
         system_instruction = get_system_prompt(mode)
         
-        # Формат сообщений для chat_completion
+        # Формируем сообщения для Chat API
         messages = [{"role": "system", "content": system_instruction}]
         for msg in history:
             messages.append(msg)
@@ -92,7 +92,7 @@ class ChatManager:
 
         response_text = ""
         
-        # 1. GIGACHAT (Если есть)
+        # 1. GIGACHAT
         if HAS_GIGACHAT and os.getenv("GIGACHAT_CREDENTIALS"):
             try:
                 def ask_sber():
