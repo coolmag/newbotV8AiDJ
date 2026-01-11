@@ -8,42 +8,44 @@ import json
 import re
 import random
 
-# --- G4F STABLE ---
+# --- G4F SAFE IMPORT ---
 import g4f
 
-PROVIDERS = [
-    g4f.Provider.GeekGpt,
-    g4f.Provider.Liaobots,
-    g4f.Provider.Chatgpt4o,
-    g4f.Provider.Blackbox,
+# БЕЗОПАСНАЯ СБОРКА ПРОВАЙДЕРОВ
+# Мы не пишем g4f.Provider.GeekGpt напрямую, чтобы не упасть при старте
+POSSIBLE_PROVIDERS = [
+    'GeekGpt', 'GeekGPT', 
+    'Liaobots', 
+    'Blackbox', 
+    'Chatgpt4o', 'ChatgptAi',
+    'FreeGpt', 'Mssagr',
+    'Hashnode'
 ]
 
-# Запасные фразы, чтобы ИИ всегда "говорил"
-BACKUP_INTROS = [
-    "В эфире Аврора. Лови волну.",
-    "Специально для тебя — лучший саунд.",
-    "Запускаю музыкальный поток.",
-    "Система готова. Поехали.",
-    "Только хиты, только хардкор.",
-    "Настраиваюсь на твою частоту.",
-    "Отличный выбор. Слушаем.",
-    "Музыка для души и тела.",
-    "Аврора на связи. Включаю.",
-    "Заряжаю позитивом.",
-]
+WORKING_PROVIDERS = []
+for name in POSSIBLE_PROVIDERS:
+    if hasattr(g4f.Provider, name):
+        WORKING_PROVIDERS.append(getattr(g4f.Provider, name))
+
+logger = logging.getLogger(__name__)
 
 async def get_ai_response(prompt: str) -> str:
-    for provider in PROVIDERS:
+    # Если список пуст, пробуем без указания провайдера (авто-выбор)
+    providers_to_try = WORKING_PROVIDERS if WORKING_PROVIDERS else [None]
+    
+    for provider in providers_to_try:
         try:
+            # Для старых версий g4f
             response = await g4f.ChatCompletion.create_async(
                 model=g4f.models.gpt_35_turbo,
                 messages=[{"role": "user", "content": prompt}],
                 provider=provider,
-                timeout=15, # Чуть меньше таймаут
+                timeout=15,
             )
             if response: return str(response)
         except: continue
-    return "" # Возвращаем пустоту, чтобы сработал fallback
+        
+    return ""
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -59,88 +61,64 @@ from youtube import YouTubeDownloader
 from handlers import setup_handlers
 from cache_service import CacheService
 
-logger = logging.getLogger(__name__)
 _start_time = time.time()
-
 def get_uptime(): return str(timedelta(seconds=int(time.time() - _start_time)))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # НАДЕЖНАЯ ВЕРСИЯ LIFESPAN
     setup_logging()
     logger.info("⚡ Application starting up...")
-    
-    try:
-        settings: Settings = get_settings()
-    except Exception as e:
-        logger.critical(f"FATAL CONFIG ERROR: {e}")
-        raise e
-    
-    # CLEANUP ON START
-    import shutil
-    if os.path.exists(settings.DOWNLOADS_DIR):
-        try:
-            shutil.rmtree(settings.DOWNLOADS_DIR)
-            logger.info("🧹 Downloads cleared.")
-        except Exception as e:
-            logger.error(f"Failed to clear downloads: {e}")
-    
+    try: settings = get_settings()
+    except: settings = Settings()
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
-    
     cache = CacheService(settings.CACHE_DB_PATH)
     await cache.initialize()
-    
     downloader = YouTubeDownloader(settings, cache)
     app.state.downloader = downloader
-    
     builder = Application.builder().token(settings.BOT_TOKEN)
     if settings.PROXY_URL: builder.proxy_url(settings.PROXY_URL)
     tg_app = builder.build()
-    
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
     setup_handlers(app=tg_app, radio=radio_manager, settings=settings, downloader=downloader)
-    
     await tg_app.initialize()
     await tg_app.start()
     await tg_app.bot.set_webhook(url=settings.WEBHOOK_URL)
-    
     app.state.tg_app = tg_app
     app.state.radio_manager = radio_manager
     app.state.cache = cache
     yield
-    
     await radio_manager.stop_all()
     await tg_app.stop()
     await tg_app.shutdown()
     await cache.close()
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=app)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     logger.info(f"[AI] Request: {prompt}")
     
-    system_instruction = "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"
-    full_prompt = f"{system_instruction}\n\nЗапрос: {prompt}"
-
+    # Резервные фразы
+    BACKUP_INTROS = [
+        "Включаю музыку.", "Погнали.", "Лови вайб.", 
+        "Специально для тебя.", "Аврора в деле.", "Музыка нас связала."
+    ]
+    
     try:
+        system = "Ты DJ Aurora. Подбери 5 треков. JSON: {'intro': '...', 'tracks': ['Artist - Title']}"
+        full_prompt = f"{system}\n\nЗапрос: {prompt}"
+        
         raw_response = await get_ai_response(full_prompt)
         
         json_match = re.search(r'{{.*}}', raw_response, re.DOTALL)
         if json_match:
             data = json.loads(json_match.group())
         else:
-            # Если ИИ не ответил JSON-ом или молчит -> берем случайную фразу
-            data = {
-                "intro": random.choice(BACKUP_INTROS), 
-                "tracks": [prompt]
-            }
+            data = {"intro": random.choice(BACKUP_INTROS), "tracks": [prompt]}
 
-        # Если интро пустое, тоже заполняем
-        if not data.get("intro"):
-            data["intro"] = random.choice(BACKUP_INTROS)
+        if not data.get("intro"): data["intro"] = random.choice(BACKUP_INTROS)
 
         downloader = request.app.state.downloader
         final_playlist = []
@@ -166,50 +144,26 @@ async def ai_dj_generate(prompt: str, request: Request):
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
     downloader = request.app.state.downloader
-    
-    # 1. Проверяем наличие файла
     path = downloader._find_downloaded_file(video_id)
-    
-    # 2. Если файла нет или он недокачан (.part)
-    if not path or os.path.exists(str(path) + ".part"):
-        logger.info(f"Downloading {video_id}...")
-        
-        # ВАЖНО: Метод download теперь сам ждет завершения
-        res = await downloader.download(video_id)
-        
-        if res.success and res.file_path:
-            path = res.file_path
-        else:
-            logger.error(f"Failed to stream {video_id}")
-            return JSONResponse(status_code=404, content={"error": "Download failed"})
-
-    # 3. Финальная проверка перед отдачей
-    if path and path.exists() and path.stat().st_size > 1024:
-        return FileResponse(
-            path, 
-            media_type="audio/mpeg", 
-            headers={"Accept-Ranges": "bytes"}
-        )
-    
-    return JSONResponse(status_code=404, content={"error": "File lost"})
+    if path: return FileResponse(path)
+    res = await downloader.download(video_id)
+    if res.success and res.file_path: return FileResponse(res.file_path)
+    return JSONResponse(status_code=404, content={"error": "File not found"})
 
 @app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}
 
 @app.get("/api/player/playlist")
 async def get_playlist(query: str, request: Request):
-    downloader: YouTubeDownloader = request.app.state.downloader
-    tracks = await downloader.search(query=query, search_mode='track', limit=15)
+    downloader = request.app.state.downloader
+    tracks = await downloader.search(query=query, limit=15)
     return {"playlist": tracks}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
     tg_app = request.app.state.tg_app
-    try:
-        data = await request.json()
-        update = Update.de_json(data, tg_app.bot)
-        await tg_app.process_update(update)
-    except Exception: pass
+    try: await tg_app.process_update(Update.de_json(await request.json(), tg_app.bot))
+    except: pass
     return {"ok": True}
 
 app.mount("/", StaticFiles(directory="webapp", html=True), name="static")
