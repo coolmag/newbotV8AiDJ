@@ -2,6 +2,9 @@ from __future__ import annotations
 import logging
 import asyncio
 import json
+import random
+import time
+import psutil # Для проверки памяти
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.constants import ParseMode, ChatType
@@ -17,39 +20,62 @@ from chat_service import ChatManager, PERSONAS
 
 logger = logging.getLogger("handlers")
 
+GREETINGS = {
+    "default": ["Привет! Я снова я. 🎧", "Режим по умолчанию. Погнали!", "Снова в эфире!"],
+    "toxic": ["Ну че, переключил? Теперь терпи.", "Ой, опять ты... Ладно, слушаю.", "Режим токсика активирован. 🙄"],
+    "gop": ["Здарова, бродяга! Че каво?", "Ну че, посидим, пообщаемся?", "Вечер в хату."],
+    "chill": ["Вайб включен... 🌌", "Расслабься, я с тобой.", "Тишина и музыка..."],
+    "quiz": ["Время викторины! 🎯 Кто тут самый умный?", "Я готова задавать вопросы!", "Погнали играть!"]
+}
+
+# --- DIAGNOSTICS ---
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🔍 *Диагностика систем...*", parse_mode=ParseMode.MARKDOWN)
+    
+    report = ["📊 *System Status Report*"]
+    
+    # 1. Server Load
+    mem = psutil.virtual_memory()
+    report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
+    
+    # 2. AI Latency Check
+    start_ai = time.time()
+    ai_resp = await ChatManager.get_response(update.effective_chat.id, "ping", "Admin")
+    ai_time = round(time.time() - start_ai, 2)
+    ai_status = "✅ OK" if "{" not in ai_resp and len(ai_resp) > 0 else "⚠️ Slow/Fallback"
+    if ai_time > 5: ai_status = "❌ Timeout"
+    report.append(f"🧠 *AI Core:* {ai_status} ({ai_time}s)")
+    
+    # 3. Radio State
+    active_sessions = len(context.application.radio_manager._sessions)
+    report.append(f"📻 *Radio:* {active_sessions} active streams")
+    
+    await msg.edit_text("\n".join(report), parse_mode=ParseMode.MARKDOWN)
+
 # --- ADMIN PANEL ---
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Панель управления ИИ."""
     chat_id = update.effective_chat.id
     current_mode = ChatManager.get_mode(chat_id)
-    
     text = (
         "🛠 *Панель Администратора*\n\n"
         f"🤖 Текущий режим: *{current_mode.upper()}*\n"
         "Выберите личность:"
     )
-    
     keyboard = []
     row = []
     for mode in PERSONAS.keys():
-        # Добавляем галочку к активному режиму
         btn_text = f"✅ {mode.upper()}" if mode == current_mode else mode.upper()
         row.append(InlineKeyboardButton(btn_text, callback_data=f"set_mode|{mode}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
     if row: keyboard.append(row)
-    
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")])
-    markup = InlineKeyboardMarkup(keyboard)
     
-    # ЛОГИКА ОТПРАВКИ:
-    # Если это команда /admin - отправляем новое сообщение
     if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
-    # Если это нажатие кнопки (Callback) - редактируем старое
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
     elif update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -62,33 +88,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("set_mode|"):
         new_mode = data.split("|")[1]
         ChatManager.set_mode(update.effective_chat.id, new_mode)
-        
-        # Обновляем галочку в меню
         await admin_command(update, context)
-        
-        # Приветствие в новом режиме (новым сообщением)
-        resp = await ChatManager.get_response(update.effective_chat.id, "Привет!", "System")
-        if "{" not in resp:
-            await context.bot.send_message(update.effective_chat.id, resp)
+        greeting = random.choice(GREETINGS.get(new_mode, GREETINGS["default"]))
+        await context.bot.send_message(update.effective_chat.id, greeting)
 
-# --- STANDARD COMMANDS ---
+# --- COMMANDS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    settings: Settings = context.application.settings
+    settings = context.application.settings
     url = settings.BASE_URL
-    text = (
-        "🎧 *Aurora System v48*\n\n"
-        "Музыкальный ИИ-Ассистент.\n\n"
-        "/radio — Эфир\n"
-        "/play — Поиск\n"
-        "/admin — Настройки ИИ"
-    )
+    text = "🎧 *Aurora v50*\n\n/radio — Эфир\n/admin — Настройки ИИ\n/status — Диагностика"
     kb = []
     if url and url.startswith("http"):
-        if update.effective_chat.type == ChatType.PRIVATE:
-            kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
-        else:
-            kb.append([InlineKeyboardButton("🔗 Open Player", url=url)])
-            
+        kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,8 +146,7 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             if "{" in response and "command" in response:
-                json_str = response[response.find("{"):response.rfind("}")+1]
-                data = json.loads(json_str)
+                data = json.loads(response[response.find("{"):response.rfind("}")+1])
                 if data.get("command") == "radio":
                     q = data.get("query", "random")
                     await update.message.reply_text(f"🎧 Окей! Ставлю: *{q}*", parse_mode=ParseMode.MARKDOWN)
@@ -166,5 +176,7 @@ def setup_handlers(app, radio, settings, downloader):
     app.add_handler(CommandHandler("player", player_command))
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("mode", admin_command))
+    app.add_handler(CommandHandler("status", status_command)) # DIAGNOSTICS
+    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
     app.add_handler(CallbackQueryHandler(button_callback))
