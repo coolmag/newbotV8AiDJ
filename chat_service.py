@@ -9,35 +9,28 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-chat_histories = defaultdict(lambda: deque(maxlen=10)) # Увеличил память
+chat_histories = defaultdict(lambda: deque(maxlen=6))
 chat_modes = defaultdict(lambda: "default")
 
-# ПРОМПТЫ (Личность)
 PERSONAS = {
-    "default": (
-        "Ты — DJ Aurora, звезда радиостанции будущего. "
-        "Твой характер: Энергичная, дерзкая, веселая. Ты любишь музыку и общение. "
-        "ВАЖНО: "
-        "1. Если пользователь просит включить музыку (любой жанр, трек, настроение) — отвечай ТОЛЬКО JSON: "
-        '{"command": "radio", "query": "запрос пользователя"}. '
-        "2. Если просто болтаем — отвечай коротко (1-2 предложения), используй сленг и эмодзи. "
-        "3. Не повторяйся! Будь креативной."
-    ),
-    "toxic": "Ты DJ Aurora (Toxic). Саркастичная и злая. Если просят музыку - отвечай JSON.",
-    "quiz": "Ты ведущая викторины. Задавай вопросы про музыку."
+    "default": "Ты DJ Aurora. Веселая и дерзкая. Если просят музыку - отвечай JSON: {\"command\": \"radio\", \"query\": \"жанр\"}. Иначе - текст (до 20 слов).",
+    "toxic": "Ты DJ Aurora (Toxic). Дерзкая.",
 }
 
 def get_system_prompt(mode):
     return PERSONAS.get(mode, PERSONAS["default"]) + " (Language: Russian)"
 
+BACKUP_PHRASES = [
+    "Связь с космосом барахлит, но музыка играет! 🎧",
+    "Аврора на связи! (ИИ перезагружается)",
+    "Что-то интернет лагает, повтори?"
+]
+
 class ChatManager:
     @staticmethod
     def set_mode(chat_id: int, mode: str) -> bool:
-        if mode in PERSONAS:
-            chat_modes[chat_id] = mode
-            chat_histories[chat_id].clear()
-            return True
-        return False
+        chat_modes[chat_id] = mode
+        return True
 
     @staticmethod
     async def ask_openrouter(messages: list) -> str:
@@ -51,22 +44,36 @@ class ChatManager:
             "HTTP-Referer": "https://aurora.radio", 
         }
         
-        # GEMINI 2.0 FLASH (Самая умная из бесплатных)
-        payload = {
-            "model": "google/gemini-2.0-flash-exp:free", 
-            "messages": messages,
-            "max_tokens": 200,
-            "temperature": 0.9 # Высокая креативность
-        }
+        # ЭКЗОТИЧЕСКИЕ БЕСПЛАТНЫЕ МОДЕЛИ (Обычно свободны)
+        models_to_try = [
+            "kwaipilot/kat-coder-pro:free", # Твой выбор
+            "cognitivecomputations/dolphin3.0-r1-mistral-24b:free",
+            "mattshumer/reflection-70b:free",
+            "mistralai/mistral-7b-instruct:free",
+            "google/gemini-2.0-flash-lite-preview-02-05:free"
+        ]
         
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                if resp.status_code == 200:
-                    return resp.json()["choices"][0]["message"]["content"]
-                else:
-                    logger.error(f"OpenRouter: {resp.status_code} {resp.text}")
-        except: pass
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for model in models_to_try:
+                try:
+                    payload = {
+                        "model": model, 
+                        "messages": messages,
+                        "max_tokens": 250,
+                        "temperature": 0.8
+                    }
+                    
+                    resp = await client.post(url, json=payload, headers=headers)
+                    
+                    if resp.status_code == 200:
+                        content = resp.json()["choices"][0]["message"]["content"]
+                        if content and len(content) > 1: return content
+                    
+                    # Если ошибка 429 - пробуем следующую модель
+                    logger.warning(f"Model {model} busy: {resp.status_code}")
+                    await asyncio.sleep(0.2)
+                except: continue
+                
         return ""
 
     @staticmethod
@@ -79,21 +86,16 @@ class ChatManager:
         for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        # ЗАПРОС
         response_text = await ChatManager.ask_openrouter(messages)
 
-        # Резерв
         if not response_text:
-            return "Связь потеряна... 📡"
+            response_text = random.choice(BACKUP_PHRASES)
 
-        # JSON команды возвращаем как есть
         if "command" in response_text and "{" in response_text:
             return response_text 
 
-        # Чистим текст
         response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
         
-        # Сохраняем в историю
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": response_text})
         
