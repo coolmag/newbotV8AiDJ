@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aurora-hifi-v40';
+const CACHE_NAME = 'aurora-hifi-v41'; // Updated cache
 const ASSETS = [
     './', './index.html', './style.css',
     './js/main.js', './js/api.js', './js/player.js',
@@ -20,9 +20,14 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
     if (e.request.method !== 'GET') return;
-    if (e.request.url.includes('/api/') || e.request.url.includes('/audio/')) {
+    
+    const url = new URL(e.request.url);
+    
+    // Исключаем внешние скрипты (Telegram) и API
+    if (url.hostname.includes('telegram') || url.pathname.includes('/api/') || url.pathname.includes('/audio/')) {
         e.respondWith(fetch(e.request));
         return;
     }
+    
     e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
 });
