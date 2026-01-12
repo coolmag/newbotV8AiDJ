@@ -14,8 +14,8 @@ logger = logging.getLogger("gemini")
 HAS_GENAI = False
 client = None
 # Актуальные модели Gemini (обновлено 2025)
-# Используем модели без суффикса -latest, так как они могут не поддерживаться
-MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+# Будем получать список доступных моделей динамически
+MODELS = []  # Будет заполнен динамически
 
 try:
     if k := os.getenv("GEMINI_API_KEY"):
@@ -72,8 +72,36 @@ def generate_smart(prompt: str) -> str:
         except: pass
         # #endregion
         return None
-    for m in MODELS:
+    
+    # Try to get list of available models first
+    MODELS_TO_TRY = []
+    try:
+        available_models = list(client.models.list())
+        logger.info(f"[Gemini] Found {len(available_models)} total models")
+        # Filter models that support generateContent
+        for model in available_models:
+            if hasattr(model, 'supported_generation_methods') and model.supported_generation_methods:
+                if 'generateContent' in model.supported_generation_methods:
+                    model_name = model.name.replace('models/', '') if model.name.startswith('models/') else model.name
+                    MODELS_TO_TRY.append(model_name)
+                    logger.info(f"[Gemini] Found model with generateContent: {model_name}")
+        
+        if not MODELS_TO_TRY:
+            # Fallback to common model names with -latest suffix
+            MODELS_TO_TRY = ['gemini-1.5-flash-latest', 'gemini-1.5-pro-latest', 'gemini-pro']
+            logger.warning(f"[Gemini] No models found via list(), using fallback: {MODELS_TO_TRY}")
+    except Exception as e:
+        logger.warning(f"[Gemini] Could not list models: {e}, using fallback list")
+        # Fallback to common model names with -latest suffix
+        MODELS_TO_TRY = ['gemini-1.5-flash-latest', 'gemini-1.5-pro-latest', 'gemini-pro']
+    
+    if not MODELS_TO_TRY:
+        logger.error("[Gemini] No models to try!")
+        return None
+    
+    for m in MODELS_TO_TRY:
         try:
+            logger.info(f"[Gemini] Trying model: {m}")
             response = client.models.generate_content(model=m, contents=prompt)
             # #region agent log
             try:

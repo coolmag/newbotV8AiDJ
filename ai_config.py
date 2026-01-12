@@ -63,14 +63,46 @@ OPENROUTER_MISTRAL_FREE = AIProviderConfig("OpenRouterMistral", os.getenv("OPENR
 OPENROUTER_LLAMA_FREE = AIProviderConfig("OpenRouterLlama", os.getenv("OPENROUTER_API_KEY", ""), "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.2-3b-instruct:free", bool(os.getenv("OPENROUTER_API_KEY")))
 
 def get_active_providers() -> List[AIProviderConfig]:
+    import logging
+    logger = logging.getLogger(__name__)
+    
     providers = []
+    all_configs = [
+        ("GigaChat", GIGACHAT_CONFIG),
+        ("HuggingFace", HF_CONFIG),
+        ("OpenRouter", OPENROUTER_CONFIG),
+        ("Together", TOGETHER_CONFIG),
+        ("Perplexity", PERPLEXITY_CONFIG),
+        ("Cohere", COHERE_CONFIG),
+        ("Anthropic", ANTHROPIC_CONFIG),
+        ("OpenRouterMistral", OPENROUTER_MISTRAL_FREE),
+        ("OpenRouterLlama", OPENROUTER_LLAMA_FREE),
+        ("Groq", GROQ_CONFIG),
+        ("Novita", NOVITA_CONFIG),
+        ("DeepSeek", DEEPSEEK_CONFIG),
+    ]
+    
     # ЖЕСТКИЙ ПРИОРИТЕТ:
     # 1. Сбер (GigaChat)
-    if GIGACHAT_CONFIG.is_active: providers.append(GIGACHAT_CONFIG)
+    if GIGACHAT_CONFIG.is_active: 
+        providers.append(GIGACHAT_CONFIG)
+        logger.info(f"[AI Config] GigaChat is ACTIVE")
+    else:
+        logger.warning(f"[AI Config] GigaChat is INACTIVE (has_key={bool(GIGACHAT_CONFIG.api_key)})")
+    
     # 2. HuggingFace (Новый роутер)
-    if HF_CONFIG.is_active: providers.append(HF_CONFIG)
+    if HF_CONFIG.is_active: 
+        providers.append(HF_CONFIG)
+        logger.info(f"[AI Config] HuggingFace is ACTIVE")
+    else:
+        logger.warning(f"[AI Config] HuggingFace is INACTIVE (has_key={bool(HF_CONFIG.api_key)})")
+    
     # 3. OpenRouter (Mistral)
-    if OPENROUTER_CONFIG.is_active: providers.append(OPENROUTER_CONFIG)
+    if OPENROUTER_CONFIG.is_active: 
+        providers.append(OPENROUTER_CONFIG)
+        logger.info(f"[AI Config] OpenRouter is ACTIVE")
+    else:
+        logger.warning(f"[AI Config] OpenRouter is INACTIVE (has_key={bool(OPENROUTER_CONFIG.api_key)})")
     
     # Бесплатные провайдеры (приоритет)
     if TOGETHER_CONFIG.is_active: providers.append(TOGETHER_CONFIG)
@@ -84,6 +116,10 @@ def get_active_providers() -> List[AIProviderConfig]:
     if GROQ_CONFIG.is_active: providers.append(GROQ_CONFIG)
     if NOVITA_CONFIG.is_active: providers.append(NOVITA_CONFIG)
     if DEEPSEEK_CONFIG.is_active: providers.append(DEEPSEEK_CONFIG)
+    
+    logger.info(f"[AI Config] Total active providers: {len(providers)}")
+    for p in providers:
+        logger.info(f"[AI Config]   - {p.name}")
     
     # #region agent log
     try:
