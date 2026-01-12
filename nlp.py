@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 import json
 
 import google.genai as genai
@@ -8,50 +8,47 @@ from config import Settings
 
 logger = logging.getLogger(__name__)
 
-async def analyze_message(message: str, settings: Settings) -> Tuple[str, Optional[str]]:
+async def analyze_message(message: str, genai_client: Optional[Any]) -> Tuple[str, Optional[str]]:
     """
-    Анализирует текстовое сообщение с помощью Gemini для определения интента.
+    Анализирует текстовое сообщение с помощью Gemini для определения интента,
+    используя новый SDK (январь 2026).
     
     Возвращает: (intent, query) где intent - 'search' или 'radio', query - уточненный запрос.
-    Fallback на простой поиск если AI недоступен.
     """
-    if not settings.GEMINI_API_KEY:
-        logger.warning("Gemini API key missing. Falling back to direct search.")
-        return "search", message  # Fallback: Трактовать как поиск трека
-    
+    if not genai_client:
+        logger.warning("GenAI client not available. Falling back to direct search.")
+        return "search", message
+
     try:
-        # Модель и конфигурация genai уже должны быть установлены в main.py
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # Новый способ получения модели (2026)
+        model = genai_client.get_model("gemini-3-flash-preview")
+
         prompt = (
-            f"Анализируй запрос пользователя для музыкального бота: '{message}'.\n"
-            "Определи интент: 'search' (поиск конкретного трека/артиста) или 'radio' (случайный микс по жанру/настроению).\n"
-            "Верни ТОЛЬКО валидный JSON с двумя ключами: {\"intent\": \"search|radio\", \"query\": \"уточненный поисковый запрос\"}.\n"
+            f"Анализируй этот запрос для музыкального бота: '{message}'.\n"
+            "Твоя задача - определить намерение ('intent') и извлечь поисковый запрос ('query').\n"
+            "Варианты 'intent': 'search' (поиск трека/артиста) или 'radio' (микс по жанру/настроению).\n"
+            "Верни ТОЛЬКО чистый JSON без markdown и лишних слов.\n"
             "Примеры:\n"
-            "- для 'включи раммштайн' -> {\"intent\": \"search\", \"query\": \"Rammstein\"}\n"
-            "- для 'хочу послушать рок' -> {\"intent\": \"radio\", \"query\": \"rock music mix\"}\n"
-            "- для 'удиви меня' -> {\"intent\": \"radio\", \"query\": \"random popular music\"}"
+            "1. Запрос: 'включи рамштайн' -> {\"intent\": \"search\", \"query\": \"Rammstein\"}\n"
+            "2. Запрос: 'хочу послушать что-то спокойное' -> {\"intent\": \"radio\", \"query\": \"lo-fi hip hop mix\"}\n"
+            "3. Запрос: 'давай нашу' -> {\"intent\": \"radio\", \"query\": \"русские хиты 2020-х\"}"
         )
+
+        # Новый асинхронный метод генерации
         response = await model.generate_content_async(prompt)
         
-        # Улучшенный парсинг JSON из ответа модели
-        json_text = response.text.strip()
-        if json_text.startswith("```json"):
-            json_text = json_text[7:]
-        if json_text.endswith("```"):
-            json_text = json_text[:-3]
+        text = response.text.strip()
+        result = json.loads(text)
         
-        result = json.loads(json_text.strip())
-        
-        intent = result.get('intent')
-        query = result.get('query')
+        intent = result.get("intent", "search")
+        query = result.get("query", message)
 
-        # Валидация ответа от AI
-        if intent not in ['search', 'radio'] or not query:
-             raise ValueError(f"Invalid intent or query from AI: {result}")
+        if intent not in ['search', 'radio'] or not isinstance(query, str):
+            raise ValueError(f"AI returned invalid data: intent='{intent}', query='{query}'")
 
         logger.info(f"NLP result: intent='{intent}', query='{query}'")
         return intent, query
 
     except Exception as e:
-        logger.error(f"NLP analysis failed for message '{message}'. Error: {e}. Falling back to direct search.")
-        return "search", message  # Graceful degradation
+        logger.error(f"NLP analysis failed for '{message}'. Error: {e}. Falling back to direct search.")
+        return "search", message

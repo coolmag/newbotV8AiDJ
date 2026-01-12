@@ -31,17 +31,19 @@ def get_uptime(): return str(timedelta(seconds=int(time.time() - _start_time)))
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Application starting up...")
-    try: settings = get_settings()
-    except: settings = Settings()
-    
-    # Инициализация Gemini API
+    settings = get_settings()
+
+    # --- NEW: Инициализация клиента Google GenAI (SDK 2026) ---
+    genai_client = None
     if settings.GEMINI_API_KEY:
         try:
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            logger.info("✅ Gemini API configured successfully.")
+            genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            logger.info("✅ Google GenAI client initialized successfully (new SDK).")
         except Exception as e:
-            logger.error(f"❌ Failed to configure Gemini API: {e}")
-
+            logger.error(f"❌ Failed to initialize GenAI client: {e}")
+    else:
+        logger.warning("GEMINI_API_KEY not found → AI features disabled.")
+    
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
     
@@ -54,6 +56,9 @@ async def lifespan(app: FastAPI):
     builder = Application.builder().token(settings.BOT_TOKEN)
     if settings.PROXY_URL: builder.proxy_url(settings.PROXY_URL)
     tg_app = builder.build()
+
+    # Сохраняем клиент в bot_data для доступа в хендлерах
+    tg_app.bot_data['genai_client'] = genai_client
     
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
     setup_handlers(app=tg_app, radio=radio_manager, settings=settings, downloader=downloader)

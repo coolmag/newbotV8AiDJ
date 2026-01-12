@@ -60,49 +60,42 @@ async def _do_radio(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE
 # --- HANDLERS ---
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """НОВЫЙ ОБРАБОТЧИК ДЛЯ ОБЫЧНОГО ТЕКСТА (NLP)"""
+    """НОВЫЙ ОБРАБОТЧИК ДЛЯ ОБЫЧНОГО ТЕКСТА (NLP + AI DJ)"""
     message_text = update.effective_message.text
-    if not message_text or len(message_text) < 3: # Игнорируем слишком короткие сообщения
+    if not message_text or len(message_text) < 3:
         return
         
-    # --- Логика AI DJ из chat_service ---
     is_private = update.effective_chat.type == ChatType.PRIVATE
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
     is_mention = any(w in message_text.lower() for w in ["аврора", "aurora", "бот", "dj"])
 
+    # 1. Сначала проверяем, нужно ли ответить как AI DJ (болтовня)
     if is_private or is_reply or is_mention:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         user_name = update.effective_user.first_name
         response = await ChatManager.get_response(update.effective_chat.id, message_text, user_name)
         
         try:
-            # Пытаемся распарсить JSON-команду от AI
             if "{" in response and "command" in response:
                 data = json.loads(response[response.find("{"):response.rfind("}")+1])
                 if data.get("command") == "radio":
-                    query = data.get("query", "random")
-                    await _do_radio(update.effective_chat.id, query, context, update)
-                    return
-        except json.JSONDecodeError:
-            # Если не JSON, значит это обычный текстовый ответ
+                    await _do_radio(update.effective_chat.id, data.get("query", "random"), context, update)
+                return 
+            else:
+                await update.message.reply_text(response)
+                return
+        except Exception:
+            # Если не JSON или другая ошибка, просто отправляем как текст
             await update.message.reply_text(response)
             return
-        except Exception as e:
-            logger.error(f"Error processing AI command: {e}")
 
-        # Если это был не JSON, отправляем как текст
-        if "{" not in response:
-            await update.message.reply_text(response)
-        return # Завершаем, если AI DJ ответил
-
-    # --- Логика NLP для поиска музыки (если AI DJ не ответил) ---
-    settings: Settings = context.application.settings
-    # Не анализируем, если нет ключа Gemini - это будет просто тратой времени
-    if not settings.GEMINI_API_KEY:
-        return
+    # 2. Если это не болтовня, используем NLP для поиска музыки
+    genai_client = context.bot_data.get('genai_client')
+    if not genai_client:
+        return # NLP движок неактивен, игнорируем сообщение
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    intent, query = await analyze_message(message_text, settings)
+    intent, query = await analyze_message(message_text, genai_client)
     
     logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
     
@@ -115,24 +108,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
-    report = ["📊 *System Status Report*"]
+    report = ["📊 *System Status Report v9.1*"]
     mem = psutil.virtual_memory()
     report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     
-    # Проверка AI провайдеров
+    # Проверка AI провайдеров (для DJ)
     from ai_config import get_active_providers
     providers = get_active_providers()
-    if providers:
-        provider_names = ', '.join([p.name for p in providers])
-        report.append(f"🧠 *AI Cascade:* ✅ {provider_names}")
-    else:
-        report.append(f"🧠 *AI Cascade:* ❌ No active providers")
+    provider_names = ', '.join([p.name for p in providers]) if providers else "None"
+    report.append(f"🧠 *AI DJ Cascade:* ✅ {provider_names}")
     
-    # Проверка NLP
-    if context.application.settings.GEMINI_API_KEY:
-        report.append("✨ *NLP Engine:* ✅ Gemini Active")
+    # Проверка NLP движка
+    if context.bot_data.get('genai_client'):
+        report.append("✨ *NLP Engine (Gemini):* ✅ Initialized")
     else:
-        report.append("✨ *NLP Engine:* ❌ Inactive (no key)")
+        report.append("✨ *NLP Engine (Gemini):* ❌ Inactive (no key)")
 
     active_sessions = len(context.application.radio_manager._sessions)
     report.append(f"📻 *Radio:* {active_sessions} active streams")
