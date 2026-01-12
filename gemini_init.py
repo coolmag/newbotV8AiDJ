@@ -50,7 +50,7 @@ except Exception as e:
         import json
         with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"gemini_init.py:15","message":"Gemini init: exception","data":{"error":str(e)[:100]},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
+except: pass
     # #endregion
     pass
 
@@ -82,24 +82,51 @@ def generate_smart(prompt: str) -> str:
         if available_models:
             logger.info(f"[Gemini] First 5 models: {[m.name for m in available_models[:5]]}")
         
-        # Filter models that support generateContent
+        # Filter models that support generateContent or are gemini-* models (text generation)
         for model in available_models:
-            if hasattr(model, 'supported_generation_methods') and model.supported_generation_methods:
-                if 'generateContent' in model.supported_generation_methods:
-                    model_name = model.name.replace('models/', '') if model.name.startswith('models/') else model.name
-                    MODELS_TO_TRY.append(model_name)
-                    logger.info(f"[Gemini] Found model with generateContent: {model_name}")
+            if not hasattr(model, 'name') or not model.name:
+                continue
+                
+            model_name = model.name.replace('models/', '') if model.name.startswith('models/') else model.name
+            
+            # Skip embedding models
+            if 'embedding' in model_name.lower() or 'gecko' in model_name.lower():
+                continue
+            
+            # Check if it's a gemini model (text generation)
+            is_gemini_model = model_name.startswith('gemini-')
+            
+            # Check supported methods
+            has_generate_content = False
+            if hasattr(model, 'supported_generation_methods'):
+                methods = model.supported_generation_methods
+                if isinstance(methods, list):
+                    has_generate_content = 'generateContent' in methods
+                elif isinstance(methods, str):
+                    has_generate_content = 'generateContent' in methods
+                elif methods:  # If it's truthy but not list/str, try to check
+                    has_generate_content = 'generateContent' in str(methods)
+            
+            if has_generate_content or is_gemini_model:
+                MODELS_TO_TRY.append(model_name)
+                logger.info(f"[Gemini] Found model: {model_name} (generateContent={has_generate_content}, is_gemini={is_gemini_model})")
+        
+        # Sort: gemini-2.5-* first, then gemini-2.0-*, then others
+        def sort_key(name):
+            if name.startswith('gemini-2.5-'):
+                return (0, name)
+            elif name.startswith('gemini-2.0-'):
+                return (1, name)
+            elif name.startswith('gemini-'):
+                return (2, name)
+            else:
+                return (3, name)
+        
+        MODELS_TO_TRY = sorted(MODELS_TO_TRY, key=sort_key)[:5]  # Take top 5
         
         if not MODELS_TO_TRY:
-            logger.warning(f"[Gemini] No models with generateContent found, trying all models")
-            # Try all models that have a name
-            for model in available_models:
-                if hasattr(model, 'name') and model.name:
-                    model_name = model.name.replace('models/', '') if model.name.startswith('models/') else model.name
-                    if model_name not in MODELS_TO_TRY:
-                        MODELS_TO_TRY.append(model_name)
-                        if len(MODELS_TO_TRY) >= 5:  # Limit to 5 models
-                            break
+            logger.error("[Gemini] No suitable models found!")
+            return None
             
             if not MODELS_TO_TRY:
                 logger.error("[Gemini] No models found at all!")
