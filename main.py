@@ -21,31 +21,19 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager 
 
-# --- FIXED: Google Gemini SDK Initialization (google-generativeai) ---
 logger = logging.getLogger(__name__)
 
-# Пытаемся импортировать правильную библиотеку
-HAS_GENAI = False
 try:
-    import google.generativeai as genai
-    HAS_GENAI = True
-    logger.info("✅ google-generativeai SDK installed.")
+    from google import genai
+    logger.info("✅ Импорт google-genai прошёл успешно")
 except ImportError:
+    logger.critical("google-genai НЕ установлен! pip install google-genai==1.57.0")
     genai = None
-    logger.error("❌ google-generativeai SDK NOT found. Install it via requirements.txt")
 
-# Настройка ключа (если библиотека есть)
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-if HAS_GENAI and GEMINI_KEY:
-    try:
-        genai.configure(api_key=GEMINI_KEY)
-        logger.info("✅ Gemini API configured successfully.")
-    except Exception as e:
-        logger.error(f"❌ Gemini configuration failed: {e}")
-        HAS_GENAI = False # Отключаем, если конфиг не удался
+if os.getenv("GEMINI_API_KEY"):
+    logger.info("✅ GEMINI_API_KEY найден в окружении — Gemini готов")
 else:
-    if not GEMINI_KEY:
-        logger.warning("⚠️ GEMINI_API_KEY not set. NLP features will be limited.")
+    logger.warning("GEMINI_API_KEY отсутствует — Gemini отключён")
 
 _start_time = time.time()
 
