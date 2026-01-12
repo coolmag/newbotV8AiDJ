@@ -7,8 +7,8 @@ import httpx
 import asyncio
 
 from ai_config import get_active_providers, AIProviderConfig
-# Импортируем новый клиент
-from gemini_init import client, HAS_GENAI
+# Импортируем нашу новую функцию
+from gemini_init import generate_smart, HAS_GENAI
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,8 @@ class ChatManager:
     @staticmethod
     def set_mode(chat_id: int, mode: str):
         chat_modes[chat_id] = mode
-    
     @staticmethod
-    def get_mode(chat_id: int):
-        return chat_modes[chat_id]
+    def get_mode(chat_id: int): return chat_modes[chat_id]
 
     @staticmethod
     async def _call_provider(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
@@ -46,28 +44,6 @@ class ChatManager:
             if resp.status_code == 200: return resp.json()["choices"][0]["message"]["content"]
         except: pass
         return None
-
-    @staticmethod
-    async def _call_native_gemini(messages: list) -> str:
-        """Резерв через Google GenAI SDK (New)"""
-        if not HAS_GENAI or not client: return None
-        try:
-            # Формируем простой промпт
-            history_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-            
-            # В v1.57.0 вызов синхронный по умолчанию. Для асинхронности в FastAPI лучше вынести в executor.
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: client.models.generate_content(
-                    model='gemini-2.0-flash-exp',
-                    contents=history_text
-                )
-            )
-            return response.text
-        except Exception as e:
-            logger.error(f"[Native Gemini] Error: {e}")
-            return None
 
     @staticmethod
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
@@ -85,8 +61,15 @@ class ChatManager:
                     history.append({"role": "assistant", "content": res})
                     return res
         
-        # 2. Native Gemini (Backup) - теперь через новый SDK
-        if res := await ChatManager._call_native_gemini(messages):
+        # 2. Native Gemini (Smart Wrapper)
+        # Собираем историю в один текст для Gemini
+        full_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+        
+        # Запускаем в отдельном потоке, так как generate_smart синхронная
+        loop = asyncio.get_event_loop()
+        res = await loop.run_in_executor(None, lambda: generate_smart(full_prompt))
+        
+        if res:
             history.append({"role": "user", "content": user_text})
             history.append({"role": "assistant", "content": res})
             return res

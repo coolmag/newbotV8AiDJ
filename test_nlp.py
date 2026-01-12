@@ -1,100 +1,80 @@
 import pytest
 from unittest.mock import Mock, patch
 
-from nlp import analyze_message, _heuristic_fallback
-from gemini_init import client, HAS_GENAI # Импорт глобальных флагов и клиента genai для мокирования
+from nlp import analyze_message, heuristic # Импорт heuristic для прямого тестирования
+from gemini_init import HAS_GENAI # Импорт HAS_GENAI для мокирования
 
 # Пропускаем тесты, если SDK не установлен
 pytestmark = pytest.mark.skipif(not HAS_GENAI, reason="google-genai SDK not imported or configured")
 
-def test_analyze_message_search_intent():
-    """Тестирует успешный happy-path с интентом 'search'."""
-    mock_response = Mock()
-    mock_response.text = '{"intent": "search", "query": "Linkin Park Numb"}'
+def test_analyze_message_success():
+    """Тестирует успешный happy-path с моком generate_smart."""
+    mock_generate_smart_response = '{"intent": "radio", "query": "энергичные хиты"}'
     
-    mock_client_instance = Mock()
-    mock_client_instance.models.generate_content.return_value = mock_response
-    
-    with patch('gemini_init.client', mock_client_instance):
-        with patch('gemini_init.HAS_GENAI', True), \
-             patch('gemini_init.client', mock_client_instance): # Ensure client is mocked globally
+    with patch('gemini_init.generate_smart', return_value=mock_generate_smart_response) as mock_generate_smart:
+        with patch('gemini_init.HAS_GENAI', True):
+            intent, query = analyze_message(message="давай давай")
             
-            intent, query = analyze_message(message="play numb")
+            mock_generate_smart.assert_called_once() # Проверяем вызов generate_smart
             
-            mock_client_instance.models.generate_content.assert_called_once_with(
-                model='gemini-2.0-flash-exp',
-                contents="Analyze this user message: \"play numb\"\n\nClassify into 3 INTENTS:\n1. \"search\" -> Request for specific song/artist.\n2. \"radio\" -> Request for genre/vibe.\n3. \"chat\" -> Conversational/greetings.\n\nReturn JSON ONLY:\n{\"intent\": \"search\"|\"radio\"|\"chat\", \"query\": \"search query or empty\"}"
-            )
-            
-            assert intent == "search"
-            assert query == "Linkin Park Numb"
+            assert intent == "radio"
+            assert query == "энергичные хиты"
 
-def test_analyze_message_chat_intent():
-    """Тестирует успешный happy-path с интентом 'chat'."""
-    mock_response = Mock()
-    mock_response.text = '{"intent": "chat", "query": ""}'
-    
-    mock_client_instance = Mock()
-    mock_client_instance.models.generate_content.return_value = mock_response
-    
-    with patch('gemini_init.client', mock_client_instance):
-        with patch('gemini_init.HAS_GENAI', True), \
-             patch('gemini_init.client', mock_client_instance):
-            
-            intent, query = analyze_message(message="how are you?")
-            
-            mock_client_instance.models.generate_content.assert_called_once_with(
-                model='gemini-2.0-flash-exp',
-                contents="Analyze this user message: \"how are you?\"\n\nClassify into 3 INTENTS:\n1. \"search\" -> Request for specific song/artist.\n2. \"radio\" -> Request for genre/vibe.\n3. \"chat\" -> Conversational/greetings.\n\nReturn JSON ONLY:\n{\"intent\": \"search\"|\"radio\"|\"chat\", \"query\": \"search query or empty\"}"
-            )
-            
+def test_analyze_message_fallback_on_generate_smart_none():
+    """Тестирует, что analyze_message вызывает heuristic, если generate_smart возвращает None."""
+    with patch('gemini_init.generate_smart', return_value=None):
+        with patch('gemini_init.HAS_GENAI', True):
+            with patch('nlp.heuristic', return_value=("chat", "")) as mock_heuristic:
+                intent, query = analyze_message(message="что угодно")
+                mock_heuristic.assert_called_once()
+                assert intent == "chat"
+                assert query == ""
+
+def test_analyze_message_fallback_on_generate_smart_error():
+    """Тестирует, что analyze_message вызывает heuristic, если generate_smart вызывает ошибку."""
+    with patch('gemini_init.generate_smart', side_effect=Exception("Generate error")):
+        with patch('gemini_init.HAS_GENAI', True):
+            with patch('nlp.heuristic', return_value=("chat", "")) as mock_heuristic:
+                intent, query = analyze_message(message="ошибка генерации")
+                mock_heuristic.assert_called_once()
+                assert intent == "chat"
+                assert query == ""
+
+def test_analyze_message_fallback_on_json_error():
+    """Тестирует, что analyze_message вызывает heuristic, если JSON некорректен."""
+    mock_generate_smart_response = "это не JSON"
+    with patch('gemini_init.generate_smart', return_value=mock_generate_smart_response):
+        with patch('gemini_init.HAS_GENAI', True):
+            with patch('nlp.heuristic', return_value=("chat", "")) as mock_heuristic:
+                intent, query = analyze_message(message="неверный json")
+                mock_heuristic.assert_called_once()
+                assert intent == "chat"
+                assert query == ""
+
+def test_analyze_message_no_sdk():
+    """Тестирует, что analyze_message вызывает heuristic, если SDK недоступен."""
+    with patch('gemini_init.HAS_GENAI', False):
+        with patch('nlp.heuristic', return_value=("chat", "")) as mock_heuristic:
+            intent, query = analyze_message(message="нет SDK")
+            mock_heuristic.assert_called_once()
             assert intent == "chat"
             assert query == ""
 
-def test_analyze_message_fallback_on_api_error():
-    """Тестирует fallback к эвристике при ошибке Gemini API."""
-    mock_client_instance = Mock()
-    mock_client_instance.models.generate_content.side_effect = Exception("API is down")
+# --- Тесты для _heuristic_fallback (прямой вызов, не нужно мокать generate_smart) ---
+def test_heuristic_fallback_search_intent():
+    """Тестирует heuristic для поискового запроса."""
+    intent, query = heuristic(message="включи рок")
+    assert intent == "search"
+    assert query == "включи рок"
 
-    with patch('gemini_init.client', mock_client_instance):
-        with patch('gemini_init.HAS_GENAI', True), \
-             patch('gemini_init.client', mock_client_instance):
-            
-            intent, query = analyze_message(message="ошибка")
-            assert intent == "chat" # Default fallback is chat now
-            assert query == ""
-
-def test_heuristic_fallback_short_chat_message():
-    """Тестирует эвристику для короткого чат-сообщения."""
-    # Используем чистую эвристику без моков Gemini
-    intent, query = _heuristic_fallback("привет")
+def test_heuristic_fallback_chat_intent_short():
+    """Тестирует heuristic для короткого чат-сообщения."""
+    intent, query = heuristic(message="привет")
     assert intent == "chat"
     assert query == ""
 
-def test_heuristic_fallback_short_search_message_with_keyword():
-    """Тестирует эвристику для короткого поискового сообщения с ключевым словом."""
-    intent, query = _heuristic_fallback("включи")
-    assert intent == "search"
-    assert query == "включи"
-
-def test_heuristic_fallback_long_search_message_no_keyword():
-    """Тестирует эвристику для длинного поискового сообщения без ключевого слова."""
-    intent, query = _heuristic_fallback("очень длинное сообщение, которое точно больше 30 символов")
-    assert intent == "search"
-    assert query == "очень длинное сообщение, которое точно больше 30 символов"
-
-@patch('gemini_init.GEMINI_KEY', None) # Мокаем отсутствие ключа внутри gemini_init
-def test_analyze_message_no_api_key_global():
-    """Тестирует fallback, если глобальный ключ API отсутствует."""
-    with patch('gemini_init.HAS_GENAI', True): # Убеждаемся, что SDK импортирован
-        intent, query = analyze_message(message="нет ключа")
-        assert intent == "chat" # Эвристика по умолчанию для короткого сообщения
-        assert query == ""
-
-@patch('gemini_init.HAS_GENAI', False) # Мокаем, что SDK не импортирован
-def test_analyze_message_sdk_not_imported():
-    """Тестирует fallback, если SDK 'genai' не импортирован."""
-    with patch('gemini_init.client', None): # SDK не импортирован, client=None
-        intent, query = analyze_message(message="нет SDK")
-        assert intent == "chat" # Эвристика по умолчанию для короткого сообщения
-        assert query == ""
+def test_heuristic_fallback_chat_intent_long_no_keywords():
+    """Тестирует heuristic для длинного чат-сообщения без ключевых слов."""
+    intent, query = heuristic(message="ну как там дела в космосе и на земле что нового и интересного происходит")
+    assert intent == "search" # Длинное сообщение без ключевых слов считается поиском
+    assert query == "ну как там дела в космосе и на земле что нового и интересного происходит"
