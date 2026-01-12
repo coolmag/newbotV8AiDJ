@@ -284,12 +284,11 @@ class ChatManager:
             
             for provider in active_providers:
                 logger.info(f"[ChatManager] Trying provider: {provider.name}")
-                # #region agent log
-                try:
-                    with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:98","message":"Trying provider","data":{"provider":provider.name},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
-                except: pass
-                # #endregion
+                
+                # Пропускаем Gemini - он используется через gemini_init.py
+                if "Gemini" in provider.name:
+                    logger.info(f"[ChatManager] Skipping Gemini (uses SDK directly)")
+                    continue
                 
                 res = None
                 try:

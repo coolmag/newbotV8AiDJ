@@ -131,12 +131,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # 2. Неявный запрос -> Анализируем через NLP
-    # (Это решает проблему "как дела?" в группе)
-    
     loop = asyncio.get_event_loop()
     intent, query = await loop.run_in_executor(None, analyze_message, message_text)
     
-    logger.info(f"[{chat_id}] NLP Analysis: '{message_text}' -> {intent}")
+    logger.info(f"[{chat_id}] NLP Analysis: '{message_text}' -> {intent} (query: '{query}')")
     
     if intent == 'chat':
         # Если NLP понял, что это просто болтовня - отвечаем
