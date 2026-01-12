@@ -2,59 +2,56 @@ import logging
 import json
 from typing import Tuple, Optional
 
-try:
-    from google import genai
-except ImportError:
-    genai = None
+# Импортируем глобальную переменную genai из main.py
+from main import genai, HAS_GENAI, GEMINI_KEY
 
-from config import Settings
-# Импортируем глобальный клиент, созданный в main.py
-from main import genai_client, HAS_GENAI
+from config import Settings # Still needed for other configs, even if not for GEMINI_API_KEY check
 
 logger = logging.getLogger(__name__)
 
-def analyze_message(message: str, settings: Settings) -> Tuple[str, Optional[str]]:
+def analyze_message(message: str) -> Tuple[str, Optional[str]]:
     """
-    Анализирует сообщение (синхронно), используя последнюю версию API (январь 2026).
+    Анализирует сообщение с помощью Gemini (синхронно).
+    Использует глобально доступный модуль genai.
     """
-    # Проверка на уровне вызова, а не импорта
-    if not HAS_GENAI or genai_client is None:
-        logger.warning("Gemini клиент недоступен → fallback на search.")
+    # Проверка, что genai импортирован и ключ доступен
+    if not HAS_GENAI or genai is None or not GEMINI_KEY:
+        logger.warning("SDK genai не доступен или ключ отсутствует → fallback на search")
         return "search", message
 
     try:
-        # Используем глобальный клиент, чтобы не создавать его каждый раз
-        model = genai_client.get_model("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
-        prompt = f"""Анализируй запрос для музыкального бота: "{message}"
+        prompt = f"""Ты — музыкальный AI-диджей.
+Анализируй сообщение пользователя: "{message}"
 
-Интент: "search" (конкретный трек/артист) или "radio" (микс, жанр, вайб, "давай", "включи").
+Определи интент:
+- "search" — хочет конкретный трек, артиста или песню
+- "radio" — хочет микс, жанр, вайб, "давай", "включи", "кайф", "движение"
 
-Верни ТОЛЬКО чистый JSON без markdown и лишних слов:
-{{"intent": "search" или "radio", "query": "короткий поисковый запрос для YouTube"}}
+Верни ТОЛЬКО чистый JSON без markdown, комментариев и лишних слов:
+{{"intent": "search"|"radio", "query": "короткий точный запрос для YouTube"}}
 
 Примеры:
-"давай давай" → {{"intent": "radio", "query": "энергичные хиты"}}
+"давай давай" → {{"intent": "radio", "query": "энергичные русские хиты"}}
 "кайф" → {{"intent": "radio", "query": "кайфовая музыка"}}
-"что нового?" → {{"intent": "search", "query": "новинки музыки"}}
+"что нового?" → {{"intent": "search", "query": "новинки музыки 2026"}}
+"ясно" → {{"intent": "radio", "query": "chill вайб"}}
 """
-        # Правильный вызов в 2026 SDK — contents как список строк
-        response = model.generate_content(
-            contents=[prompt],
-            generation_config={"temperature": 0.7, "max_output_tokens": 150}
-        )
+
+        response = model.generate_content([prompt])
 
         text = response.text.strip()
         if text.startswith("```json"):
-            text = text.split("```json", 1)[1].rsplit("```", 1)[0].strip()
+            text = text.split("```json")[1].split("```")[0].strip()
 
         result = json.loads(text)
         intent = result.get("intent", "search")
-        query = result.get("query", message[:100])
+        query = result.get("query", message[:150])
 
         logger.info(f"[Gemini] '{message}' → intent={intent}, query='{query}'")
         return intent, query
 
     except Exception as e:
         logger.error(f"Gemini ошибка: {str(e)[:300]}")
-        return "search", message[:100]
+        return "search", message[:150]

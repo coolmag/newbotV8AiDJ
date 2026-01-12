@@ -13,33 +13,37 @@ from fastapi.middleware.cors import CORSMiddleware
 from telegram import Update, BotCommand
 from telegram.ext import Application
 
-# --- FINAL CORRECT v8: Инициализация Google GenAI SDK ---
-logger = logging.getLogger(__name__)
-genai_client = None
-try:
-    from google import genai
-    HAS_GENAI = True
-    GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-    if HAS_GENAI and GEMINI_KEY:
-        try:
-            genai_client = genai.Client(api_key=GEMINI_KEY)
-            logger.info("✅ Gemini SDK (google-genai) v8 успешно инициализирован! Ключ OK.")
-        except Exception as e:
-            logger.error(f"❌ Клиент Gemini не создался: {e}")
-    else:
-        logger.warning("Gemini отключён: нет пакета или ключа.")
-except ImportError as e:
-    HAS_GENAI = False
-    logger.critical(f"!!! ПАКЕТ GOOGLE-GENAI НЕ УСТАНОВЛЕН !!! Ошибка: {e}")
-
-
 from config import get_settings, Settings
 from logging_setup import setup_logging
 from radio import RadioManager
 from youtube import YouTubeDownloader
 from handlers import setup_handlers
 from cache_service import CacheService
-from chat_service import ChatManager
+from chat_service import ChatManager # ЕДИНЫЙ МОЗГ
+
+# --- FINAL CORRECT v8: Инициализация Google GenAI SDK (пакет google-genai, auto-config) ---
+logger = logging.getLogger(__name__)
+
+# Объявляем глобальные переменные для доступа из других модулей (например, nlp.py)
+genai = None # Будет содержать импортированный модуль genai или None
+HAS_GENAI = False
+GEMINI_KEY = os.getenv("GEMINI_API_KEY") # Ключ теперь глобально
+
+try:
+    from google import genai as _genai_module # Импортируем под другим именем, чтобы не конфликтовать
+    genai = _genai_module # Присваиваем глобальной переменной
+    HAS_GENAI = True
+    logger.info("✅ Импорт google-genai прошёл успешно")
+except ImportError:
+    HAS_GENAI = False
+    logger.critical("google-genai НЕ установлен! Установи pip install google-genai==1.57.0")
+    genai = None # Убеждаемся, что genai установлен в None
+
+if HAS_GENAI and GEMINI_KEY:
+    logger.info("✅ GEMINI_API_KEY найден в окружении — Gemini готов к работе")
+else:
+    logger.warning("GEMINI_API_KEY отсутствует или SDK не установлен — Gemini отключён")
+
 
 _start_time = time.time()
 

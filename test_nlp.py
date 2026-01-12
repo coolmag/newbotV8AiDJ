@@ -1,12 +1,12 @@
 import pytest
 from unittest.mock import Mock, patch
 
+# Импортируем функцию для тестирования
 from nlp import analyze_message, genai
-from config import Settings
 from main import HAS_GENAI, GEMINI_KEY # Импорт глобальных флагов для мокирования
 
 # Пропускаем тесты, если SDK не установлен
-pytestmark = pytest.mark.skipif(not HAS_GENAI, reason="google-genai SDK not installed or configured")
+pytestmark = pytest.mark.skipif(not genai, reason="google-genai SDK not installed or configured")
 
 def test_analyze_message_success():
     """Тестирует happy-path с моком genai.GenerativeModel."""
@@ -16,11 +16,12 @@ def test_analyze_message_success():
     mock_model_instance = Mock()
     mock_model_instance.generate_content.return_value = mock_response
     
+    # Патчим класс GenerativeModel в модуле 'genai'
     with patch('google.genai.GenerativeModel', return_value=mock_model_instance) as mock_model_class:
-        settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY="fake-key") # Ключ нужен для внутренней проверки
+        # Для этого теста нам не нужен объект Settings, так как genai авто-конфигурируется
         
-        # Передаем settings и сообщение
-        intent, query = analyze_message(message="давай давай", settings=settings)
+        # Передаем только сообщение
+        intent, query = analyze_message(message="давай давай")
         
         mock_model_class.assert_called_once_with("gemini-1.5-flash")
         mock_model_instance.generate_content.assert_called_once()
@@ -31,27 +32,20 @@ def test_analyze_message_success():
 def test_analyze_message_fallback_on_error():
     """Тестирует fallback при ошибке API."""
     with patch('google.genai.GenerativeModel', side_effect=Exception("API is down")):
-        settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY="fake-key")
-        
-        intent, query = analyze_message(message="ошибка", settings=settings)
-        
+        intent, query = analyze_message(message="ошибка")
         assert intent == "search"
         assert query == "ошибка"
 
-def test_analyze_message_no_api_key():
-    """Тестирует fallback, если ключ API отсутствует (симулируем через settings)."""
-    settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY=None)
-    
-    intent, query = analyze_message(message="нет ключа", settings=settings)
-    
+@patch('main.GEMINI_KEY', None) # Мокаем отсутствие ключа
+def test_analyze_message_no_api_key_global():
+    """Тестирует fallback, если глобальный ключ API отсутствует."""
+    intent, query = analyze_message(message="нет ключа")
     assert intent == "search"
     assert query == "нет ключа"
 
-def test_analyze_message_sdk_not_installed():
-    """Тестирует fallback, если SDK 'genai' не установлен (симулируем)."""
-    # Мокаем HAS_GENAI как False, чтобы симулировать отсутствие SDK
-    with patch('main.HAS_GENAI', False):
-        settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY="fake-key")
-        intent, query = analyze_message(message="нет SDK", settings=settings)
-        assert intent == "search"
-        assert query == "нет SDK"
+@patch('main.HAS_GENAI', False) # Мокаем, что SDK не импортирован
+def test_analyze_message_sdk_not_imported():
+    """Тестирует fallback, если SDK 'genai' не импортирован."""
+    intent, query = analyze_message(message="нет SDK")
+    assert intent == "search"
+    assert query == "нет SDK"

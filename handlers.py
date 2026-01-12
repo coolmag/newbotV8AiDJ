@@ -97,16 +97,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # 2. Если это не болтовня, используем NLP для поиска музыки
-    from main import genai_client # Глобальный клиент из main
-    if not genai_client:
-        return # NLP движок неактивен, игнорируем сообщение
-
+    # Проверка, что genai доступен, делается внутри analyze_message
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Запускаем синхронную NLP функцию в отдельном потоке
     loop = asyncio.get_event_loop()
     intent, query = await loop.run_in_executor(
-        None, analyze_message, message_text, context.bot_data.get('settings') # settings needed for GEMINI_API_KEY check
+        None, analyze_message, message_text
     )
     
     logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
@@ -120,7 +117,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
-    report = ["📊 *System Status Report v12 (Final Fix)*"]
+    report = ["📊 *System Status Report v13 (Final Fix)*"]
     mem = psutil.virtual_memory()
     report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     
