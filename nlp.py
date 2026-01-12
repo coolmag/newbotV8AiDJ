@@ -1,26 +1,26 @@
 import logging
 import json
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
-# Импортируем глобальную переменную genai из main.py
-from main import genai, HAS_GENAI, GEMINI_KEY
+# Импорты будут переданы через аргументы
+# from google import genai
+# from main import HAS_GENAI, GEMINI_KEY 
 
 from config import Settings # Still needed for other configs, even if not for GEMINI_API_KEY check
 
 logger = logging.getLogger(__name__)
 
-def analyze_message(message: str) -> Tuple[str, Optional[str]]:
+def analyze_message(message: str, genai_module: Any, has_genai: bool, gemini_key: Optional[str]) -> Tuple[str, Optional[str]]:
     """
     Анализирует сообщение с помощью Gemini (синхронно).
-    Использует глобально доступный модуль genai.
+    Использует переданный модуль genai и его флаги.
     """
-    # Проверка, что genai импортирован и ключ доступен
-    if not HAS_GENAI or genai is None or not GEMINI_KEY:
+    if not has_genai or genai_module is None or not gemini_key:
         logger.warning("SDK genai не доступен или ключ отсутствует → fallback на search")
         return "search", message
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai_module.GenerativeModel("gemini-1.5-flash")
 
         prompt = f"""Ты — музыкальный AI-диджей.
 Анализируй сообщение пользователя: "{message}"

@@ -21,29 +21,12 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager # ЕДИНЫЙ МОЗГ
 
-# --- FINAL CORRECT v8: Инициализация Google GenAI SDK (пакет google-genai, auto-config) ---
 logger = logging.getLogger(__name__)
 
-# Объявляем глобальные переменные для доступа из других модулей (например, nlp.py)
-genai = None # Будет содержать импортированный модуль genai или None
-HAS_GENAI = False
-GEMINI_KEY = os.getenv("GEMINI_API_KEY") # Ключ теперь глобально
-
-try:
-    from google import genai as _genai_module # Импортируем под другим именем, чтобы не конфликтовать
-    genai = _genai_module # Присваиваем глобальной переменной
-    HAS_GENAI = True
-    logger.info("✅ Импорт google-genai прошёл успешно")
-except ImportError:
-    HAS_GENAI = False
-    logger.critical("google-genai НЕ установлен! Установи pip install google-genai==1.57.0")
-    genai = None # Убеждаемся, что genai установлен в None
-
-if HAS_GENAI and GEMINI_KEY:
-    logger.info("✅ GEMINI_API_KEY найден в окружении — Gemini готов к работе")
-else:
-    logger.warning("GEMINI_API_KEY отсутствует или SDK не установлен — Gemini отключён")
-
+# Глобальные флаги, которые будут установлены в lifespan
+_genai_module = None
+_has_genai = False
+_gemini_key = None
 
 _start_time = time.time()
 
@@ -54,6 +37,25 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Application starting up...")
     settings = get_settings()
+
+    # --- Инициализация Google GenAI SDK (пакет google-genai) ---
+    global _genai_module, _has_genai, _gemini_key # Используем глобальные переменные
+    _gemini_key = os.getenv("GEMINI_API_KEY")
+
+    try:
+        from google import genai
+        _genai_module = genai
+        _has_genai = True
+        logger.info("✅ Импорт google-genai прошёл успешно.")
+    except ImportError:
+        _has_genai = False
+        _genai_module = None
+        logger.critical("google-genai НЕ установлен! Установи pip install google-genai==1.57.0")
+
+    if _has_genai and _gemini_key:
+        logger.info("✅ GEMINI_API_KEY найден в окружении — Gemini готов к работе.")
+    else:
+        logger.warning("Gemini отключён: нет пакета или ключа.")
     
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
@@ -69,6 +71,10 @@ async def lifespan(app: FastAPI):
     tg_app = builder.build()
     
     tg_app.bot_data['settings'] = settings
+    # Передаем genai и флаги через bot_data
+    tg_app.bot_data['genai_module'] = _genai_module
+    tg_app.bot_data['has_genai'] = _has_genai
+    tg_app.bot_data['gemini_key'] = _gemini_key
 
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
     setup_handlers(app=tg_app, radio=radio_manager, settings=settings, downloader=downloader)
