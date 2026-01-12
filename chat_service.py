@@ -78,25 +78,30 @@ class ChatManager:
 
     @staticmethod
     async def _call_generic(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
-        """Обычный вызов для OpenAI-совместимых API (Groq, Novita, HF, OpenRouter)"""
         try:
             headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
             payload = {"model": provider.model, "messages": messages, "max_tokens": 150}
             
-            # HuggingFace костыль для Inference API
+            # СПЕЦИАЛЬНЫЙ ФИКС ДЛЯ HUGGING FACE
             if "huggingface" in provider.base_url:
-                payload.pop("model", None)
+                # HF Inference API иногда требует "inputs" вместо "messages" для старых моделей,
+                # но для /v1/chat/completions (который мы используем) нужен стандартный формат.
+                # Однако, URL должен быть без суффикса /v1/chat/completions в base_url, если мы его добавляем тут.
+                # В конфиге мы задали полный URL, значит шлем туда.
+                pass
             
-            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=6.0)
+            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=8.0)
             
             if resp.status_code == 200:
                 data = resp.json()
                 if "choices" in data: return data["choices"][0]["message"]["content"]
                 if isinstance(data, list) and "generated_text" in data[0]: return data[0]["generated_text"]
             
-            logger.warning(f"[{provider.name}] Error {resp.status_code}")
+            # Логируем тело ошибки, чтобы понять причину (например 404 Model not found)
+            logger.warning(f"[{provider.name}] Error {resp.status_code}: {resp.text[:200]}")
+
         except Exception as e:
-            logger.warning(f"[{provider.name}] Error: {e}")
+            logger.warning(f"[{provider.name}] Ex: {e}")
         return None
 
     @staticmethod
