@@ -1,54 +1,24 @@
 import os
 import logging
 import time
-import random
 
 logger = logging.getLogger("gemini")
-
 HAS_GENAI = False
 client = None
-
-# Добавили модели попроще в конец списка
-MODELS = [
-    'gemini-2.0-flash-exp',
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-8b'
-]
+# Ставим 1.5-flash первой, она самая живучая по лимитам
+MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash-exp']
 
 try:
     from google import genai
-    api_key = os.getenv("GEMINI_API_KEY")
-    if api_key:
-        client = genai.Client(api_key=api_key)
+    if k := os.getenv("GEMINI_API_KEY"):
+        client = genai.Client(api_key=k)
         HAS_GENAI = True
-        logger.info("✅ Google GenAI SDK подключен.")
-    else:
-        logger.warning("⚠️ GEMINI_API_KEY не найден.")
-
-except ImportError:
-    logger.error("❌ Библиотека 'google-genai' не установлена.")
+except: pass
 
 def generate_smart(prompt: str) -> str:
     if not HAS_GENAI or not client: return None
-
-    for model_name in MODELS:
+    for m in MODELS:
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
-            return response.text
-            
-        except Exception as e:
-            e_str = str(e)
-            if "429" in e_str or "RESOURCE_EXHAUSTED" in e_str:
-                logger.warning(f"⏳ Limit on {model_name}. Waiting 2s...")
-                time.sleep(2) # Небольшая пауза, вдруг отпустит
-                continue 
-            
-            if "404" in e_str: continue # Модель не найдена - идем дальше
-            
-            logger.error(f"❌ Error {model_name}: {e}")
-            continue
-
+            return client.models.generate_content(model=m, contents=prompt).text
+        except Exception: time.sleep(1)
     return None
