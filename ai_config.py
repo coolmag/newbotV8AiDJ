@@ -19,6 +19,66 @@ class AIProviderConfig:
     base_url: str
     model: str
     is_active: bool
+    # Для ротации ключей
+    key_index: int = 0  # Индекс ключа в списке (для Gemini)
+
+def _parse_gemini_keys() -> List[str]:
+    """Парсит несколько Gemini ключей из переменной окружения (через запятую)"""
+    keys_env = os.getenv("GEMINI_API_KEYS", "")
+    if not keys_env:
+        # Попробовать одиночный ключ
+        single_key = os.getenv("GEMINI_API_KEY", "")
+        return [single_key] if single_key else []
+    # Разделить по запятой и очистить
+    return [k.strip() for k in keys_env.split(",") if k.strip()]
+
+def _get_kodacode_models() -> List[str]:
+    """Получает доступные модели от KodaCode"""
+    models_env = os.getenv("KODACODE_MODELS", "gpt-4o,claude-sonnet-4-20250514,gemini-2.5-pro")
+    return [m.strip() for m in models_env.split(",") if m.strip()]
+
+# === KODACODE (OpenAI-совместимый, бесплатные модели) ===
+KODACODE_CONFIG = AIProviderConfig(
+    name="KodaCode",
+    api_key=os.getenv("KODACODE_API_KEY", "sk-0"),  # Бесплатный ключ по умолчанию
+    base_url=os.getenv("KODACODE_BASE_URL", "https://kodacode.ru/v1"),
+    model=os.getenv("KODACODE_MODEL", "gpt-4o"),
+    is_active=bool(os.getenv("KODACODE_API_KEY")) or True,  # Всегда активен (ключ необязателен)
+    key_index=0
+)
+
+# === GEMINI С РОТАЦИЕЙ КЛЮЧЕЙ ===
+GEMINI_KEYS = _parse_gemini_keys()
+GEMINI_CONFIGS = []
+
+for i, key in enumerate(GEMINI_KEYS):
+    config = AIProviderConfig(
+        name=f"Gemini_{i+1}",
+        api_key=key,
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        model="gemini-2.5-flash",
+        is_active=bool(key),
+        key_index=i
+    )
+    GEMINI_CONFIGS.append(config)
+
+# Если нет ключей, добавляем пустой для обработки
+if not GEMINI_CONFIGS:
+    GEMINI_CONFIGS.append(AIProviderConfig(
+        name="Gemini_1",
+        api_key=os.getenv("GEMINI_API_KEY", ""),
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        model="gemini-2.5-flash",
+        is_active=False,
+        key_index=0
+    ))
+
+# === OPENROUTER БЕСПЛАТНЫЕ МОДЕЛИ ===
+OPENROUTER_FREE_MODELS = [
+    ("openrouter_free_mistral", "mistralai/mistral-7b-instruct:free"),
+    ("openrouter_free_llama", "meta-llama/llama-3.2-3b-instruct:free"),
+    ("openrouter_free_qwen", "qwen/qwen-2.5-72b-instruct:free"),
+]
 
 # 1. GIGACHAT (Сбер) — СТАВИМ ПЕРВЫМ!
 # Самый надежный вариант для РФ.
@@ -70,52 +130,46 @@ def get_active_providers() -> List[AIProviderConfig]:
     logger = logging.getLogger(__name__)
     
     providers = []
-    all_configs = [
-        ("GigaChat", GIGACHAT_CONFIG),
-        ("HuggingFace", HF_CONFIG),
-        ("OpenRouter", OPENROUTER_CONFIG),
-        ("Together", TOGETHER_CONFIG),
-        ("Perplexity", PERPLEXITY_CONFIG),
-        ("Cohere", COHERE_CONFIG),
-        ("Anthropic", ANTHROPIC_CONFIG),
-        ("OpenRouterMistral", OPENROUTER_MISTRAL_FREE),
-        ("OpenRouterLlama", OPENROUTER_LLAMA_FREE),
-        ("Groq", GROQ_CONFIG),
-        ("Novita", NOVITA_CONFIG),
-        ("DeepSeek", DEEPSEEK_CONFIG),
-    ]
     
-    # ЖЕСТКИЙ ПРИОРИТЕТ:
-    # 1. Сбер (GigaChat)
+    # === ПРИОРИТЕТ 1: KODACODE (Бесплатный OpenAI-совместимый) ===
+    if KODACODE_CONFIG.is_active or True:  # Всегда активен
+        providers.append(KODACODE_CONFIG)
+        logger.info(f"[AI Config] KodaCode is ACTIVE (base_url: {KODACODE_CONFIG.base_url})")
+    
+    # === ПРИОРИТЕТ 2: GIGACHAT (Сбер) ===
     if GIGACHAT_CONFIG.is_active: 
         providers.append(GIGACHAT_CONFIG)
         logger.info(f"[AI Config] GigaChat is ACTIVE")
     else:
         logger.warning(f"[AI Config] GigaChat is INACTIVE (has_key={bool(GIGACHAT_CONFIG.api_key)})")
     
-    # 2. HuggingFace (Новый роутер)
-    if HF_CONFIG.is_active: 
-        providers.append(HF_CONFIG)
-        logger.info(f"[AI Config] HuggingFace is ACTIVE")
+    # === ПРИОРИТЕТ 3: GEMINI с ротацией ключей ===
+    active_gemini = [c for c in GEMINI_CONFIGS if c.is_active]
+    if active_gemini:
+        # Добавляем все активные Gemini ключи (будет ротация)
+        for config in active_gemini:
+            providers.append(config)
+        logger.info(f"[AI Config] Gemini ACTIVE with {len(active_gemini)} keys")
     else:
-        logger.warning(f"[AI Config] HuggingFace is INACTIVE (has_key={bool(HF_CONFIG.api_key)})")
+        logger.warning(f"[AI Config] Gemini is INACTIVE (no valid keys)")
     
-    # 3. OpenRouter (Mistral)
-    if OPENROUTER_CONFIG.is_active: 
-        providers.append(OPENROUTER_CONFIG)
-        logger.info(f"[AI Config] OpenRouter is ACTIVE")
-    else:
-        logger.warning(f"[AI Config] OpenRouter is INACTIVE (has_key={bool(OPENROUTER_CONFIG.api_key)})")
+    # === ПРИОРИТЕТ 4: OpenRouter бесплатные ===
+    if OPENROUTER_MISTRAL_FREE.is_active:
+        providers.append(OPENROUTER_MISTRAL_FREE)
+        logger.info(f"[AI Config] OpenRouter Mistral Free is ACTIVE")
+    if OPENROUTER_LLAMA_FREE.is_active:
+        providers.append(OPENROUTER_LLAMA_FREE)
+        logger.info(f"[AI Config] OpenRouter Llama Free is ACTIVE")
     
-    # Бесплатные провайдеры (приоритет)
+    # === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ ===
     if TOGETHER_CONFIG.is_active: providers.append(TOGETHER_CONFIG)
     if PERPLEXITY_CONFIG.is_active: providers.append(PERPLEXITY_CONFIG)
     if COHERE_CONFIG.is_active: providers.append(COHERE_CONFIG)
     if ANTHROPIC_CONFIG.is_active: providers.append(ANTHROPIC_CONFIG)
-    if OPENROUTER_MISTRAL_FREE.is_active: providers.append(OPENROUTER_MISTRAL_FREE)
-    if OPENROUTER_LLAMA_FREE.is_active: providers.append(OPENROUTER_LLAMA_FREE)
     
-    # Резервы
+    # === РЕЗЕРВЫ (платные) ===
+    if HF_CONFIG.is_active: providers.append(HF_CONFIG)
+    if OPENROUTER_CONFIG.is_active: providers.append(OPENROUTER_CONFIG)
     if GROQ_CONFIG.is_active: providers.append(GROQ_CONFIG)
     if NOVITA_CONFIG.is_active: providers.append(NOVITA_CONFIG)
     if DEEPSEEK_CONFIG.is_active: providers.append(DEEPSEEK_CONFIG)
@@ -123,20 +177,20 @@ def get_active_providers() -> List[AIProviderConfig]:
     logger.info(f"[AI Config] Total active providers: {len(providers)}")
     if providers:
         for p in providers:
-            logger.info(f"[AI Config]   - {p.name} (base_url: {p.base_url[:50]}...)")
+            logger.info(f"[AI Config]   - {p.name} ({p.model})")
     else:
-        logger.error("[AI Config] NO ACTIVE PROVIDERS! Check API keys in environment variables.")
-        logger.error("[AI Config] Available env vars should include: GIGACHAT_CREDENTIALS, HF_TOKEN, OPENROUTER_API_KEY, etc.")
-    
-    # #region agent log
-    try:
-        import json
-        all_configs = [GIGACHAT_CONFIG, HF_CONFIG, OPENROUTER_CONFIG, TOGETHER_CONFIG, PERPLEXITY_CONFIG, 
-                      COHERE_CONFIG, ANTHROPIC_CONFIG, OPENROUTER_MISTRAL_FREE, OPENROUTER_LLAMA_FREE,
-                      GROQ_CONFIG, NOVITA_CONFIG, DEEPSEEK_CONFIG]
-        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"ai_config.py:79","message":"get_active_providers","data":{"count":len(providers),"active":[(p.name, p.is_active) for p in all_configs]},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
+        logger.error("[AI Config] NO ACTIVE PROVIDERS!")
     
     return providers
+
+
+def get_gemini_client_for_key(key_index: int = 0):
+    """Получает Gemini клиент для определенного ключа"""
+    if key_index < len(GEMINI_KEYS) and GEMINI_KEYS[key_index]:
+        try:
+            from google import genai
+            return genai.Client(api_key=GEMINI_KEYS[key_index])
+        except Exception as e:
+            logger.error(f"[Gemini] Failed to create client for key {key_index}: {e}")
+            return None
+    return None

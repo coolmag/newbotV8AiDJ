@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from collections import deque, defaultdict
 
-from ai_config import get_active_providers, AIProviderConfig
+from ai_config import get_active_providers, AIProviderConfig, KODACODE_CONFIG
 from gemini_init import generate_smart, HAS_GENAI
 
 def _get_debug_log_path():
@@ -166,6 +166,43 @@ class ChatManager:
         return None
 
     @staticmethod
+    async def _call_kodacode(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        """KodaCode API - OpenAI compatible with free models"""
+        try:
+            logger.info(f"[KodaCode] Calling {provider.base_url} with model {provider.model}")
+            
+            # KodaCode использует стандартный OpenAI-совместимый формат
+            headers = {
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": provider.model,
+                "messages": messages,
+                "max_tokens": 200,
+                "temperature": 0.7
+            }
+            
+            resp = await client.post(f"{provider.base_url}/chat/completions", json=payload, headers=headers, timeout=15.0)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    result = data["choices"][0]["message"]["content"]
+                    logger.info(f"[KodaCode] Success, result length: {len(result)}")
+                    return result
+            else:
+                error_text = resp.text[:200]
+                logger.warning(f"[KodaCode] Status {resp.status_code}: {error_text}")
+                # Если 429 - это rate limit, вернем None чтобы попробовать следующий провайдер
+                if resp.status_code == 429:
+                    return None
+        except Exception as e:
+            logger.warning(f"[KodaCode] Error: {e}")
+        return None
+
+    @staticmethod
     async def _call_generic(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
         # #region agent log
         try:
@@ -262,6 +299,8 @@ class ChatManager:
                         res = await ChatManager._call_anthropic(http_client, provider, messages)
                     elif provider.name == "Cohere":
                         res = await ChatManager._call_cohere(http_client, provider, messages)
+                    elif "KodaCode" in provider.name:
+                        res = await ChatManager._call_kodacode(http_client, provider, messages)
                     else:
                         res = await ChatManager._call_generic(http_client, provider, messages)
                 except Exception as e:
