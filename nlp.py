@@ -2,7 +2,7 @@ import logging
 from typing import Optional, Tuple
 import json
 
-import google.generativeai as genai
+import google.genai as genai
 
 from config import Settings
 
@@ -21,7 +21,7 @@ async def analyze_message(message: str, settings: Settings) -> Tuple[str, Option
     
     try:
         # Модель и конфигурация genai уже должны быть установлены в main.py
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         prompt = (
             f"Анализируй запрос пользователя для музыкального бота: '{message}'.\n"
             "Определи интент: 'search' (поиск конкретного трека/артиста) или 'radio' (случайный микс по жанру/настроению).\n"

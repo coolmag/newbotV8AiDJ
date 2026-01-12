@@ -5,7 +5,7 @@ import time
 from datetime import timedelta
 import os
 import json
-import google.generativeai as genai
+import google.genai as genai
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
