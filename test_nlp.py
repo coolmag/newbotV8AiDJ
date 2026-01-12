@@ -1,37 +1,53 @@
 import pytest
 from unittest.mock import Mock, patch
 
-# Импортируем функцию для тестирования
 from nlp import analyze_message
-# Импорт глобальных флагов и модуля genai для мокирования
-from gemini_init import genai, HAS_GENAI, GEMINI_KEY 
+from gemini_init import genai, HAS_GENAI # Импорт глобальных флагов и модуля genai для мокирования
 
 # Пропускаем тесты, если SDK не установлен
 pytestmark = pytest.mark.skipif(not HAS_GENAI, reason="google-generativeai SDK not imported or configured")
 
-def test_analyze_message_success():
-    """Тестирует happy-path с моком genai.GenerativeModel."""
+def test_analyze_message_search_intent():
+    """Тестирует успешный happy-path с интентом 'search'."""
     mock_response = Mock()
-    mock_response.text = '{"intent": "radio", "query": "энергичные хиты"}'
+    mock_response.text = '{"intent": "search", "query": "Linkin Park Numb"}'
     
     mock_model_instance = Mock()
     mock_model_instance.generate_content.return_value = mock_response
     
-    # Патчим класс GenerativeModel в модуле 'google.generativeai'
     with patch('google.generativeai.GenerativeModel', return_value=mock_model_instance) as mock_model_class:
-        # Мокаем глобальные переменные для nlp
         with patch('gemini_init.HAS_GENAI', True), \
              patch('gemini_init.GEMINI_KEY', "fake-key"), \
-             patch('gemini_init.genai', genai): # Передаем мокнутый genai в nlp.py
+             patch('gemini_init.genai', genai):
             
-            # Передаем только сообщение
-            intent, query = analyze_message(message="давай давай")
+            intent, query = analyze_message(message="play numb")
             
-            mock_model_class.assert_called_once_with("gemini-1.5-flash")
+            mock_model_class.assert_called_once_with("gemini-1.5-flash-001")
             mock_model_instance.generate_content.assert_called_once()
             
-            assert intent == "radio"
-            assert query == "энергичные хиты"
+            assert intent == "search"
+            assert query == "Linkin Park Numb"
+
+def test_analyze_message_chat_intent():
+    """Тестирует успешный happy-path с интентом 'chat'."""
+    mock_response = Mock()
+    mock_response.text = '{"intent": "chat", "query": ""}'
+    
+    mock_model_instance = Mock()
+    mock_model_instance.generate_content.return_value = mock_response
+    
+    with patch('google.generativeai.GenerativeModel', return_value=mock_model_instance) as mock_model_class:
+        with patch('gemini_init.HAS_GENAI', True), \
+             patch('gemini_init.GEMINI_KEY', "fake-key"), \
+             patch('gemini_init.genai', genai):
+            
+            intent, query = analyze_message(message="how are you?")
+            
+            mock_model_class.assert_called_once_with("gemini-1.5-flash-001")
+            mock_model_instance.generate_content.assert_called_once()
+            
+            assert intent == "chat"
+            assert query == ""
 
 def test_analyze_message_fallback_on_error():
     """Тестирует fallback при ошибке API."""
@@ -43,6 +59,30 @@ def test_analyze_message_fallback_on_error():
             intent, query = analyze_message(message="ошибка")
             assert intent == "search"
             assert query == "ошибка"
+
+def test_analyze_message_fallback_to_heuristic_short_message():
+    """Тестирует fallback к эвристике для короткого сообщения."""
+    # Мокаем ошибку от GenerativeModel
+    with patch('google.generativeai.GenerativeModel', side_effect=Exception("Model not found")):
+        with patch('gemini_init.HAS_GENAI', True), \
+             patch('gemini_init.GEMINI_KEY', "fake-key"), \
+             patch('gemini_init.genai', genai):
+            
+            intent, query = analyze_message(message="привет") # Короткое сообщение
+            assert intent == "chat"
+            assert query == ""
+
+def test_analyze_message_fallback_to_heuristic_long_message_with_keywords():
+    """Тестирует fallback к поиску для длинного сообщения с ключевыми словами."""
+    # Мокаем ошибку от GenerativeModel
+    with patch('google.generativeai.GenerativeModel', side_effect=Exception("Model not found")):
+        with patch('gemini_init.HAS_GENAI', True), \
+             patch('gemini_init.GEMINI_KEY', "fake-key"), \
+             patch('gemini_init.genai', genai):
+            
+            intent, query = analyze_message(message="включи мне песню про любовь")
+            assert intent == "search"
+            assert query == "включи мне песню про любовь"
 
 @patch('gemini_init.GEMINI_KEY', None) # Мокаем отсутствие ключа внутри gemini_init
 def test_analyze_message_no_api_key_global():
