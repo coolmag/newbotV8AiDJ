@@ -67,57 +67,67 @@ async def _do_radio(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE
 # --- HANDLERS ---
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """НОВЫЙ ОБРАБОТЧИК ДЛЯ ОБЫЧНОГО ТЕКСТА (NLP + AI DJ)"""
+    """
+    DEBUG VERSION OF HANDLER
+    """
     message_text = update.effective_message.text
-    if not message_text or len(message_text) < 3:
+    chat_id = update.effective_chat.id
+    
+    # --- LOGGING START ---
+    logger.info(f"📨 MSG from {chat_id}: {message_text}")
+    # --- LOGGING END ---
+
+    if not message_text or len(message_text) < 2:
         return
         
     is_private = update.effective_chat.type == ChatType.PRIVATE
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
     is_mention = any(w in message_text.lower() for w in ["аврора", "aurora", "бот", "dj"])
 
-    # 1. Сначала проверяем, нужно ли ответить как AI DJ (болтовня)
+    # 1. CHAT MODE (Болтовня)
     if is_private or is_reply or is_mention:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        logger.info(f"🗣 Chatting with {chat_id}...")
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         user_name = update.effective_user.first_name
-        response = await ChatManager.get_response(update.effective_chat.id, message_text, user_name)
         
+        # Получаем ответ
+        response = await ChatManager.get_response(chat_id, message_text, user_name)
+        logger.info(f"🤖 Response: {response}")
+        
+        # Обработка ответа
         try:
             if "{" in response and "command" in response:
-                data = json.loads(response[response.find("{"):response.rfind("}")+1])
+                # Пытаемся распарсить JSON команду от LLM
+                clean_json = response[response.find("{"):response.rfind("}")+1]
+                data = json.loads(clean_json)
                 if data.get("command") == "radio":
-                    await _do_radio(update.effective_chat.id, data.get("query", "random"), context, update)
+                    await _do_radio(chat_id, data.get("query", "random"), context, update)
                 return 
             else:
                 await update.message.reply_text(response)
                 return
-        except Exception:
-            # Если не JSON или другая ошибка, просто отправляем как текст
-            await update.message.reply_text(response)
+        except Exception as e:
+            logger.error(f"Chat error: {e}")
+            await update.message.reply_text(response) # Отправляем как есть, если не распарсили
             return
 
-    # 2. Если это не болтовня, используем NLP для поиска музыки
-    # Проверка, что genai доступен, делается внутри analyze_message
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    # 2. COMMAND MODE (Поиск через NLP)
+    logger.info(f"🧠 Analyze intent for: {message_text}")
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     
-    # Запускаем синхронную NLP функцию в отдельном потоке
     loop = asyncio.get_event_loop()
-    intent, query = await loop.run_in_executor(
-        None, analyze_message, message_text
-    )
-    
-    logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
+    intent, query = await loop.run_in_executor(None, analyze_message, message_text)
     
     if intent == 'search':
-        await _do_play(update.effective_chat.id, query, context, update)
+        await _do_play(chat_id, query, context, update)
     elif intent == 'radio':
-        await _do_radio(update.effective_chat.id, query, context, update)
+        await _do_radio(chat_id, query, context, update)
 
 
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
-    report = ["📊 *System Status Report v13 (Final Fix)*"]
+    report = ["📊 *System Status Report v14 (Final Fix)*"]
     mem = psutil.virtual_memory()
     report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     

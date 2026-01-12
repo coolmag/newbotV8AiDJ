@@ -1,26 +1,32 @@
 import logging
 import json
-from typing import Tuple, Optional, Any
+from typing import Tuple, Optional
 
-# Импорты будут переданы через аргументы
-# from google import genai
-# from main import HAS_GENAI, GEMINI_KEY 
+# Импорт должен быть google.generativeai
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 from config import Settings # Still needed for other configs, even if not for GEMINI_API_KEY check
 
+# Импортируем глобальные флаги из main.py
+from main import HAS_GENAI, GEMINI_KEY 
+
 logger = logging.getLogger(__name__)
 
-def analyze_message(message: str, genai_module: Any, has_genai: bool, gemini_key: Optional[str]) -> Tuple[str, Optional[str]]:
+def analyze_message(message: str) -> Tuple[str, Optional[str]]:
     """
     Анализирует сообщение с помощью Gemini (синхронно).
-    Использует переданный модуль genai и его флаги.
+    Использует глобально доступный модуль genai.
     """
-    if not has_genai or genai_module is None or not gemini_key:
+    # Проверка, что genai импортирован и ключ доступен
+    if not HAS_GENAI or genai is None or not GEMINI_KEY:
         logger.warning("SDK genai не доступен или ключ отсутствует → fallback на search")
         return "search", message
 
     try:
-        model = genai_module.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
         prompt = f"""Ты — музыкальный AI-диджей.
 Анализируй сообщение пользователя: "{message}"
@@ -49,7 +55,7 @@ def analyze_message(message: str, genai_module: Any, has_genai: bool, gemini_key
         intent = result.get("intent", "search")
         query = result.get("query", message[:150])
 
-        logger.info(f"[Gemini] '{message}' → intent={intent}, query='{query}'")
+        logger.info(f"[Gemini] '{message}' → intent={intent} | '{query}'")
         return intent, query
 
     except Exception as e:

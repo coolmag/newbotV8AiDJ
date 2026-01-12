@@ -19,14 +19,33 @@ from radio import RadioManager
 from youtube import YouTubeDownloader
 from handlers import setup_handlers
 from cache_service import CacheService
-from chat_service import ChatManager # ЕДИНЫЙ МОЗГ
+from chat_service import ChatManager 
 
+# --- FIXED: Google Gemini SDK Initialization (google-generativeai) ---
 logger = logging.getLogger(__name__)
 
-# Глобальные флаги, которые будут установлены в lifespan
-_genai_module = None
-_has_genai = False
-_gemini_key = None
+# Пытаемся импортировать правильную библиотеку
+HAS_GENAI = False
+try:
+    import google.generativeai as genai
+    HAS_GENAI = True
+    logger.info("✅ google-generativeai SDK installed.")
+except ImportError:
+    genai = None
+    logger.error("❌ google-generativeai SDK NOT found. Install it via requirements.txt")
+
+# Настройка ключа (если библиотека есть)
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+if HAS_GENAI and GEMINI_KEY:
+    try:
+        genai.configure(api_key=GEMINI_KEY)
+        logger.info("✅ Gemini API configured successfully.")
+    except Exception as e:
+        logger.error(f"❌ Gemini configuration failed: {e}")
+        HAS_GENAI = False # Отключаем, если конфиг не удался
+else:
+    if not GEMINI_KEY:
+        logger.warning("⚠️ GEMINI_API_KEY not set. NLP features will be limited.")
 
 _start_time = time.time()
 
@@ -37,64 +56,51 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Application starting up...")
     settings = get_settings()
-
-    # --- Инициализация Google GenAI SDK (пакет google-genai) ---
-    global _genai_module, _has_genai, _gemini_key # Используем глобальные переменные
-    _gemini_key = os.getenv("GEMINI_API_KEY")
-
-    try:
-        from google import genai
-        _genai_module = genai
-        _has_genai = True
-        logger.info("✅ Импорт google-genai прошёл успешно.")
-    except ImportError:
-        _has_genai = False
-        _genai_module = None
-        logger.critical("google-genai НЕ установлен! Установи pip install google-genai==1.57.0")
-
-    if _has_genai and _gemini_key:
-        logger.info("✅ GEMINI_API_KEY найден в окружении — Gemini готов к работе.")
-    else:
-        logger.warning("Gemini отключён: нет пакета или ключа.")
     
+    # Ensure directories exist
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
     
     cache = CacheService(settings.CACHE_DB_PATH)
     await cache.initialize()
     
+    # Initialize Downloader
     downloader = YouTubeDownloader(settings, cache)
     app.state.downloader = downloader
     
+    # Build Telegram App
     builder = Application.builder().token(settings.BOT_TOKEN)
     if settings.PROXY_URL: builder.proxy_url(settings.PROXY_URL)
     tg_app = builder.build()
     
     tg_app.bot_data['settings'] = settings
-    # Передаем genai и флаги через bot_data
-    tg_app.bot_data['genai_module'] = _genai_module
-    tg_app.bot_data['has_genai'] = _has_genai
-    tg_app.bot_data['gemini_key'] = _gemini_key
 
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
+    
     setup_handlers(app=tg_app, radio=radio_manager, settings=settings, downloader=downloader)
     
     commands = [
-        BotCommand("radio", "🎲 Случайная волна"),
-        BotCommand("play", "🔎 Найти трек"),
-        BotCommand("admin", "🤖 Настроить личность ИИ"),
-        BotCommand("status", "📊 Проверить статус систем"),
-        BotCommand("stop", "🛑 Остановить музыку"),
+        BotCommand("radio", "🎲 Random Wave"),
+        BotCommand("play", "🔎 Search Track"),
+        BotCommand("admin", "🤖 AI Personality"),
+        BotCommand("status", "📊 System Status"),
+        BotCommand("stop", "🛑 Stop Music"),
     ]
     await tg_app.bot.set_my_commands(commands)
     
     await tg_app.initialize()
     await tg_app.start()
-    await tg_app.bot.set_webhook(url=settings.WEBHOOK_URL)
+    
+    # Webhook
+    if settings.WEBHOOK_URL:
+        await tg_app.bot.set_webhook(url=settings.WEBHOOK_URL)
+        logger.info(f"Webhook set to: {settings.WEBHOOK_URL}")
+    
     app.state.tg_app = tg_app
     app.state.radio_manager = radio_manager
     app.state.cache = cache
     yield
+    # Cleanup
     await radio_manager.stop_all()
     await tg_app.stop()
     await tg_app.shutdown()
@@ -106,18 +112,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     logger.info(f"[AI] Web Request: {prompt}")
-    
-    # Используем тот же мощный ChatManager, что и в телеграме
-    # Фиктивный chat_id=0 для веб-запросов
-    intro = await ChatManager.get_response(0, f"Подбери музыку: {prompt}. Ответь коротко, как диджей.", "Listener")
-    
-    # Если ответ слишком длинный или пустой, берем заглушку
-    if not intro or len(intro) > 100: 
-        intro = "Отличный выбор! Включаю."
+    intro = await ChatManager.get_response(0, f"Music for: {prompt}. Short DJ intro.", "Listener")
+    if not intro or len(intro) > 100: intro = "Playing your vibes!"
 
     downloader = request.app.state.downloader
     tracks = await downloader.search(query=prompt, limit=10)
-    
     return {"dj_intro": intro, "playlist": tracks}
 
 @app.get("/audio/{video_id}.mp3")
@@ -144,7 +143,7 @@ async def get_playlist(query: str, request: Request):
 async def telegram_webhook(request: Request):
     tg_app = request.app.state.tg_app
     try: await tg_app.process_update(Update.de_json(await request.json(), tg_app.bot))
-    except: pass
+    except Exception as e: logger.error(f"Webhook error: {e}")
     return {"ok": True}
 
 app.mount("/", StaticFiles(directory="webapp", html=True), name="static")
