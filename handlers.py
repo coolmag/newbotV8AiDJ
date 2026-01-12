@@ -113,7 +113,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
-    report = ["📊 *System Status Report v10 (Final SDK)*"]
+    report = ["📊 *System Status Report v11 (Final Attempt)*"]
     mem = psutil.virtual_memory()
     report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     
@@ -124,10 +124,13 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report.append(f"🧠 *AI DJ Cascade:* ✅ {provider_names}")
     
     # Проверка NLP движка
-    if context.bot_data.get('genai_client'):
-        report.append("✨ *NLP Engine (Gemini):* ✅ Initialized")
+    from main import HAS_GENAI, GEMINI_KEY
+    if HAS_GENAI and GEMINI_KEY:
+        report.append("✨ *NLP Engine (Gemini):* ✅ SDK Found, Key Present")
+    elif HAS_GENAI:
+        report.append("✨ *NLP Engine (Gemini):* ⚠️ SDK Found, No Key")
     else:
-        report.append("✨ *NLP Engine (Gemini):* ❌ Inactive")
+        report.append("✨ *NLP Engine (Gemini):* ❌ SDK Not Found")
 
     active_sessions = len(context.application.radio_manager._sessions)
     report.append(f"📻 *Radio:* {active_sessions} active streams")

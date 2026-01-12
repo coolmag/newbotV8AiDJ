@@ -1,51 +1,48 @@
 import pytest
 from unittest.mock import Mock, patch
 
-# Импортируем функцию и типы, которые нужно мокать
-from nlp import analyze_message
-try:
-    from google import genai
-    from google.genai import types
-    GENAI_INSTALLED = True
-except ImportError:
-    GENAI_INSTALLED = False
+# Импортируем функцию для тестирования
+from nlp import analyze_message, genai
+from config import Settings
 
 # Пропускаем все тесты в этом файле, если SDK не установлен
-pytestmark = pytest.mark.skipif(not GENAI_INSTALLED, reason="google-genai SDK not installed")
+pytestmark = pytest.mark.skipif(not genai, reason="google-genai SDK not installed")
 
 def test_analyze_message_success():
-    """Тестирует happy-path с моком клиента и его методов."""
-    # Мокаем ответ от API
+    """Тестирует happy-path с правильным моком для синхронной функции."""
     mock_response = Mock()
-    mock_response.text = '{"intent": "radio", "query": "энергичные русские хиты 2025"}'
+    mock_response.text = '{"intent": "radio", "query": "энергичные русские хиты"}'
     
-    # Мокаем сам клиент
-    mock_client = Mock(spec=genai.Client)
-    # Мокаем цепочку вызовов client.models.generate_content
-    mock_client.models.generate_content.return_value = mock_response
+    mock_model_instance = Mock()
+    mock_model_instance.generate_content.return_value = mock_response
+    
+    with patch('google.genai.GenerativeModel', return_value=mock_model_instance) as mock_model_class:
+        settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY="fake-key")
+        
+        # Передаем settings и сообщение
+        intent, query = analyze_message(settings, "давай давай")
+        
+        mock_model_class.assert_called_once_with("gemini-1.5-flash")
+        mock_model_instance.generate_content.assert_called_once()
+        
+        assert intent == "radio"
+        assert query == "энергичные русские хиты"
 
-    # Вызываем нашу функцию с мок-клиентом
-    intent, query = analyze_message("давай давай", mock_client)
-    
-    # Проверяем, что был вызван правильный метод
-    mock_client.models.generate_content.assert_called_once()
-    
-    # Проверяем результат
-    assert intent == "radio"
-    assert query == "энергичные русские хиты 2025"
+def test_analyze_message_fallback_on_error():
+    """Тестирует fallback при ошибке API."""
+    with patch('google.genai.GenerativeModel', side_effect=Exception("API is down")):
+        settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY="fake-key")
+        
+        intent, query = analyze_message(settings, "любой запрос")
+        
+        assert intent == "search"
+        assert query == "любой запрос"
 
-def test_analyze_message_fallback_on_no_client():
-    """Тестирует fallback, если клиент None."""
-    intent, query = analyze_message("тест", None)
+def test_analyze_message_no_api_key():
+    """Тестирует fallback, если ключ API отсутствует."""
+    settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY=None)
+    
+    intent, query = analyze_message(settings, "тестовый запрос")
+    
     assert intent == "search"
-    assert query == "тест"
-
-def test_analyze_message_fallback_on_api_error():
-    """Тестирует fallback при ошибке вызова API."""
-    mock_client = Mock(spec=genai.Client)
-    mock_client.models.generate_content.side_effect = Exception("API is down")
-
-    intent, query = analyze_message("ошибка", mock_client)
-
-    assert intent == "search"
-    assert query == "ошибка"
+    assert query == "тестовый запрос"

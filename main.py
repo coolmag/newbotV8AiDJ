@@ -21,25 +21,23 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager # ЕДИНЫЙ МОЗГ
 
-# --- FINAL CORRECT v5: Инициализация Google GenAI SDK (пакет google-genai) ---
+# --- FINAL CORRECT v6: Инициализация Google GenAI SDK (пакет google-genai) ---
 logger = logging.getLogger(__name__)
 try:
     from google import genai
     HAS_GENAI = True
-except ImportError:
+except ImportError as e:
     HAS_GENAI = False
-    logger.critical("!!! ПАКЕТ GOOGLE-GENAI НЕ УСТАНОВЛЕН !!!")
+    logger.critical(f"!!! ПАКЕТ GOOGLE-GENAI НЕ УСТАНОВЛЕН !!! Ошибка: {e}")
 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 if HAS_GENAI and GEMINI_KEY:
-    try:
-        genai.configure(api_key=GEMINI_KEY)
-        logger.info("✅ Google GenAI SDK (google-genai) успешно настроен.")
-    except Exception as e:
-        logger.error(f"❌ Ошибка конфигурации GenAI: {e}")
+    # Конфигурация происходит автоматически при наличии GEMINI_API_KEY
+    logger.info("✅ Google GenAI SDK (google-genai) успешно загружен! Ключ найден.")
 else:
-    logger.warning("Gemini отключён: нет пакета или ключа.")
+    logger.warning("Gemini отключён: нет пакета или GEMINI_API_KEY")
+
 
 _start_time = time.time()
 
@@ -64,7 +62,6 @@ async def lifespan(app: FastAPI):
     if settings.PROXY_URL: builder.proxy_url(settings.PROXY_URL)
     tg_app = builder.build()
     
-    # Передаем настройки в контекст приложения PTB
     tg_app.bot_data['settings'] = settings
 
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
