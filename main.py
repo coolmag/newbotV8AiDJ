@@ -5,7 +5,6 @@ import time
 from datetime import timedelta
 import os
 import json
-import google.genai as genai
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -22,7 +21,26 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager # ЕДИНЫЙ МОЗГ
 
+# --- FINAL CORRECT v5: Инициализация Google GenAI SDK (пакет google-genai) ---
 logger = logging.getLogger(__name__)
+try:
+    from google import genai
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+    logger.critical("!!! ПАКЕТ GOOGLE-GENAI НЕ УСТАНОВЛЕН !!!")
+
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+
+if HAS_GENAI and GEMINI_KEY:
+    try:
+        genai.configure(api_key=GEMINI_KEY)
+        logger.info("✅ Google GenAI SDK (google-genai) успешно настроен.")
+    except Exception as e:
+        logger.error(f"❌ Ошибка конфигурации GenAI: {e}")
+else:
+    logger.warning("Gemini отключён: нет пакета или ключа.")
+
 _start_time = time.time()
 
 def get_uptime(): return str(timedelta(seconds=int(time.time() - _start_time)))
@@ -32,21 +50,7 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Application starting up...")
     settings = get_settings()
-
-    # --- FINAL CORRECT v3: Инициализация Google GenAI SDK (пакет google-genai) ---
-    try:
-        import genai
-        if settings.GEMINI_API_KEY:
-            try:
-                genai.configure(api_key=settings.GEMINI_API_KEY)
-                logger.info("✅ Google GenAI SDK successfully configured (import 'genai').")
-            except Exception as e:
-                logger.error(f"❌ Failed to configure GenAI SDK: {e}")
-        else:
-            logger.warning("GEMINI_API_KEY not found → NLP features will be disabled.")
-    except ImportError:
-        logger.error("❌ 'google-genai' package not found. NLP features will be disabled.")
-
+    
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
     

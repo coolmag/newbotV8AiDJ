@@ -1,63 +1,51 @@
 import pytest
-from unittest.mock import AsyncMock, patch
-from config import Settings
+from unittest.mock import Mock, patch
 
-# Импортируем функцию для тестирования
+# Импортируем функцию и типы, которые нужно мокать
 from nlp import analyze_message
+try:
+    from google import genai
+    from google.genai import types
+    GENAI_INSTALLED = True
+except ImportError:
+    GENAI_INSTALLED = False
 
-@pytest.mark.asyncio
-async def test_analyze_message_success():
-    """Тестирует успешный happy-path с правильным импортом 'genai'."""
-    # Мокаем модель и ее ответ
-    mock_model_instance = AsyncMock()
-    mock_response = AsyncMock()
-    mock_response.text = '{"intent": "radio", "query": "энергичные русские хиты"}'
-    mock_model_instance.generate_content_async.return_value = mock_response
+# Пропускаем все тесты в этом файле, если SDK не установлен
+pytestmark = pytest.mark.skipif(not GENAI_INSTALLED, reason="google-genai SDK not installed")
 
-    # Патчим класс GenerativeModel внутри модуля nlp, где он используется
-    with patch('nlp.genai.GenerativeModel', return_value=mock_model_instance) as mock_model_class:
-        settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY="fake-key")
-        
-        intent, query = await analyze_message("давай давай", settings)
-        
-        # Проверяем, что GenerativeModel был инстанцирован
-        mock_model_class.assert_called_once_with(model_name="gemini-1.5-flash")
-        
-        # Проверяем, что был вызван метод генерации
-        mock_model_instance.generate_content_async.assert_called_once()
-        
-        # Проверяем результат
-        assert intent == "radio"
-        assert query == "энергичные русские хиты"
-
-@pytest.mark.asyncio
-async def test_analyze_message_fallback_on_error():
-    """Тестирует fallback при ошибке API."""
-    with patch('nlp.genai.GenerativeModel', side_effect=Exception("API is down")):
-        settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY="fake-key")
-        
-        intent, query = await analyze_message("любой запрос", settings)
-        
-        assert intent == "search"
-        assert query == "любой запрос"
-
-@pytest.mark.asyncio
-async def test_analyze_message_no_api_key():
-    """Тестирует fallback, если ключ API отсутствует."""
-    settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY=None)
+def test_analyze_message_success():
+    """Тестирует happy-path с моком клиента и его методов."""
+    # Мокаем ответ от API
+    mock_response = Mock()
+    mock_response.text = '{"intent": "radio", "query": "энергичные русские хиты 2025"}'
     
-    intent, query = await analyze_message("тестовый запрос", settings)
+    # Мокаем сам клиент
+    mock_client = Mock(spec=genai.Client)
+    # Мокаем цепочку вызовов client.models.generate_content
+    mock_client.models.generate_content.return_value = mock_response
+
+    # Вызываем нашу функцию с мок-клиентом
+    intent, query = analyze_message("давай давай", mock_client)
     
+    # Проверяем, что был вызван правильный метод
+    mock_client.models.generate_content.assert_called_once()
+    
+    # Проверяем результат
+    assert intent == "radio"
+    assert query == "энергичные русские хиты 2025"
+
+def test_analyze_message_fallback_on_no_client():
+    """Тестирует fallback, если клиент None."""
+    intent, query = analyze_message("тест", None)
     assert intent == "search"
-    assert query == "тестовый запрос"
+    assert query == "тест"
 
-@pytest.mark.asyncio
-async def test_analyze_message_sdk_not_installed():
-    """Тестирует fallback, если SDK 'genai' не установлен."""
-    with patch('nlp.genai', None): # Симулируем отсутствие модуля
-        settings = Settings(BOT_TOKEN="test", GEMINI_API_KEY="fake-key")
-        
-        intent, query = await analyze_message("test", settings)
+def test_analyze_message_fallback_on_api_error():
+    """Тестирует fallback при ошибке вызова API."""
+    mock_client = Mock(spec=genai.Client)
+    mock_client.models.generate_content.side_effect = Exception("API is down")
 
-        assert intent == "search"
-        assert query == "test"
+    intent, query = analyze_message("ошибка", mock_client)
+
+    assert intent == "search"
+    assert query == "ошибка"

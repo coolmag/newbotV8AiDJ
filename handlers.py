@@ -92,13 +92,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Если это не болтовня, используем NLP для поиска музыки
     settings: Settings = context.bot_data.get('settings')
     if not settings or not settings.GEMINI_API_KEY:
-        # Если ключа нет, даже не пытаемся анализировать.
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # Прямой вызов, так как analyze_message снова async
-    intent, query = await analyze_message(message_text, settings)
+    # Запускаем синхронную NLP функцию в отдельном потоке
+    loop = asyncio.get_event_loop()
+    intent, query = await loop.run_in_executor(
+        None, analyze_message, settings, message_text
+    )
     
     logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
     
@@ -111,7 +113,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
-    report = ["📊 *System Status Report v9.2 (Fixed)*"]
+    report = ["📊 *System Status Report v10 (Final SDK)*"]
     mem = psutil.virtual_memory()
     report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     
@@ -122,10 +124,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report.append(f"🧠 *AI DJ Cascade:* ✅ {provider_names}")
     
     # Проверка NLP движка
-    if context.application.settings.GEMINI_API_KEY:
-        report.append("✨ *NLP Engine (Gemini):* ✅ Configured")
+    if context.bot_data.get('genai_client'):
+        report.append("✨ *NLP Engine (Gemini):* ✅ Initialized")
     else:
-        report.append("✨ *NLP Engine (Gemini):* ❌ Inactive (no key)")
+        report.append("✨ *NLP Engine (Gemini):* ❌ Inactive")
 
     active_sessions = len(context.application.radio_manager._sessions)
     report.append(f"📻 *Radio:* {active_sessions} active streams")
