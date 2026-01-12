@@ -33,16 +33,16 @@ async def lifespan(app: FastAPI):
     logger.info("⚡ Application starting up...")
     settings = get_settings()
 
-    # --- NEW: Инициализация клиента Google GenAI (SDK 2026) ---
-    genai_client = None
+    # --- CORRECT FINAL: Инициализация Google GenAI SDK (версия 2026) ---
     if settings.GEMINI_API_KEY:
         try:
-            genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            logger.info("✅ Google GenAI client initialized successfully (new SDK).")
+            # Прямая конфигурация модуля. Она глобальна для всего приложения.
+            genai.configure(api_key=settings.GEMINI_API_KEY)
+            logger.info("✅ Google GenAI SDK configured successfully (Final Fix).")
         except Exception as e:
-            logger.error(f"❌ Failed to initialize GenAI client: {e}")
+            logger.error(f"❌ Failed to configure GenAI SDK: {e}")
     else:
-        logger.warning("GEMINI_API_KEY not found → AI features disabled.")
+        logger.warning("GEMINI_API_KEY not found → NLP features will be disabled.")
     
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
@@ -56,14 +56,13 @@ async def lifespan(app: FastAPI):
     builder = Application.builder().token(settings.BOT_TOKEN)
     if settings.PROXY_URL: builder.proxy_url(settings.PROXY_URL)
     tg_app = builder.build()
-
-    # Сохраняем клиент в bot_data для доступа в хендлерах
-    tg_app.bot_data['genai_client'] = genai_client
     
+    # Передаем настройки в контекст приложения PTB
+    tg_app.bot_data['settings'] = settings
+
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
     setup_handlers(app=tg_app, radio=radio_manager, settings=settings, downloader=downloader)
     
-    # Установка меню команд
     commands = [
         BotCommand("radio", "🎲 Случайная волна"),
         BotCommand("play", "🔎 Найти трек"),

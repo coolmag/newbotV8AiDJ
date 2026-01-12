@@ -1,6 +1,6 @@
 import logging
-from typing import Optional, Tuple, Any
 import json
+from typing import Tuple, Optional
 
 import google.genai as genai
 
@@ -8,47 +8,50 @@ from config import Settings
 
 logger = logging.getLogger(__name__)
 
-async def analyze_message(message: str, genai_client: Optional[Any]) -> Tuple[str, Optional[str]]:
+def analyze_message(message: str, settings: Settings) -> Tuple[str, Optional[str]]:
     """
-    Анализирует текстовое сообщение с помощью Gemini для определения интента,
-    используя новый SDK (январь 2026).
-    
-    Возвращает: (intent, query) где intent - 'search' или 'radio', query - уточненный запрос.
+    Анализирует сообщение пользователя с помощью Gemini (синхронно).
+    Возвращает (intent, query)
     """
-    if not genai_client:
-        logger.warning("GenAI client not available. Falling back to direct search.")
+    if not settings.GEMINI_API_KEY:
+        logger.warning("GenAI не настроен (нет ключа). Fallback на прямой поиск.")
         return "search", message
 
     try:
-        # Новый способ получения модели (2026)
-        model = genai_client.get_model("gemini-3-flash-preview")
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
-        prompt = (
-            f"Анализируй этот запрос для музыкального бота: '{message}'.\n"
-            "Твоя задача - определить намерение ('intent') и извлечь поисковый запрос ('query').\n"
-            "Варианты 'intent': 'search' (поиск трека/артиста) или 'radio' (микс по жанру/настроению).\n"
-            "Верни ТОЛЬКО чистый JSON без markdown и лишних слов.\n"
-            "Примеры:\n"
-            "1. Запрос: 'включи рамштайн' -> {\"intent\": \"search\", \"query\": \"Rammstein\"}\n"
-            "2. Запрос: 'хочу послушать что-то спокойное' -> {\"intent\": \"radio\", \"query\": \"lo-fi hip hop mix\"}\n"
-            "3. Запрос: 'давай нашу' -> {\"intent\": \"radio\", \"query\": \"русские хиты 2020-х\"}"
-        )
+        prompt = f"""Ты — умный музыкальный бот-диджей.
+Проанализируй сообщение пользователя: "{message}"
 
-        # Новый асинхронный метод генерации
-        response = await model.generate_content_async(prompt)
-        
+Определи интент:
+- "search" — если хочет конкретный трек, артиста, песню
+- "radio" — если хочет включить радио, микс, волну, жанр, вайб, "давай нашу", "включи что-то", "будет движение"
+
+Верни ТОЛЬКО чистый JSON без каких-либо комментариев и markdown:
+{{"intent": "search" или "radio", "query": "уточнённый поисковый запрос для YouTube"}}
+
+Примеры:
+"давай нашу" -> {{"intent": "radio", "query": "русские хиты 2020-х"}}
+"включи рок" -> {{"intent": "radio", "query": "classic rock mix"}}
+"найди песню про любовь" -> {{"intent": "search", "query": "песня про любовь"}}
+"будет движение?" -> {{"intent": "radio", "query": "энергичная танцевальная музыка"}}
+"""
+
+        response = model.generate_content(prompt)
+
         text = response.text.strip()
+        if '```json' in text:
+            text = text.split('```json')[1].split('```')[0].strip()
+        elif '```' in text:
+            text = text.replace('```', '').strip()
+
         result = json.loads(text)
-        
         intent = result.get("intent", "search")
-        query = result.get("query", message)
+        query = result.get("query", message.strip())
 
-        if intent not in ['search', 'radio'] or not isinstance(query, str):
-            raise ValueError(f"AI returned invalid data: intent='{intent}', query='{query}'")
-
-        logger.info(f"NLP result: intent='{intent}', query='{query}'")
+        logger.info(f"Gemini анализ: '{message}' → intent={intent}, query={query}")
         return intent, query
 
     except Exception as e:
-        logger.error(f"NLP analysis failed for '{message}'. Error: {e}. Falling back to direct search.")
+        logger.error(f"Ошибка анализа Gemini: {e}")
         return "search", message

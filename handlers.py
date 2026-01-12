@@ -90,12 +90,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # 2. Если это не болтовня, используем NLP для поиска музыки
-    genai_client = context.bot_data.get('genai_client')
-    if not genai_client:
-        return # NLP движок неактивен, игнорируем сообщение
+    settings: Settings = context.bot_data.get('settings')
+    if not settings or not settings.GEMINI_API_KEY:
+        # Если ключа нет, даже не пытаемся анализировать.
+        return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    intent, query = await analyze_message(message_text, genai_client)
+    
+    # Запускаем синхронную функцию в отдельном потоке, чтобы не блокировать asyncio
+    loop = asyncio.get_event_loop()
+    intent, query = await loop.run_in_executor(
+        None, analyze_message, message_text, settings
+    )
     
     logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
     
@@ -108,7 +114,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
-    report = ["📊 *System Status Report v9.1*"]
+    report = ["📊 *System Status Report v9.2 (Fixed)*"]
     mem = psutil.virtual_memory()
     report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     
@@ -119,8 +125,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report.append(f"🧠 *AI DJ Cascade:* ✅ {provider_names}")
     
     # Проверка NLP движка
-    if context.bot_data.get('genai_client'):
-        report.append("✨ *NLP Engine (Gemini):* ✅ Initialized")
+    if context.application.settings.GEMINI_API_KEY:
+        report.append("✨ *NLP Engine (Gemini):* ✅ Configured")
     else:
         report.append("✨ *NLP Engine (Gemini):* ❌ Inactive (no key)")
 
