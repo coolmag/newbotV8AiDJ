@@ -42,20 +42,22 @@ try:
         except: pass
         # #endregion
 except Exception as e:
+    logger.error(f"[Gemini] Init exception: {e}", exc_info=True)
     # #region agent log
     try:
         import json
-        with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"gemini_init.py:15","message":"Gemini init: exception","data":{"error":str(e)[:100]},"timestamp":int(__import__("time").time()*1000)})+"\n")
     except: pass
     # #endregion
     pass
 
 def generate_smart(prompt: str) -> str:
+    logger.info(f"[Gemini] generate_smart called, HAS_GENAI={HAS_GENAI}, client_exists={client is not None}")
     # #region agent log
     try:
         import json
-        with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"gemini_init.py:17","message":"generate_smart ENTRY","data":{"has_genai":HAS_GENAI,"client_exists":client is not None},"timestamp":int(__import__("time").time()*1000)})+"\n")
     except: pass
     # #endregion
@@ -79,22 +81,53 @@ def generate_smart(prompt: str) -> str:
             except: pass
             # #endregion
             
-            # Try to get text - it might be a property or method
+            # Try to get text - multiple methods
             try:
+                result = None
+                # Method 1: Try direct .text property/method
                 if hasattr(response, 'text'):
-                    if callable(getattr(response, 'text', None)):
-                        result = response.text()
+                    text_attr = getattr(response, 'text', None)
+                    if callable(text_attr):
+                        result = text_attr()
                     else:
-                        result = response.text
-                elif hasattr(response, 'candidates') and response.candidates:
-                    # Alternative: try to get text from candidates
-                    if hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
-                        result = response.candidates[0].content.parts[0].text if response.candidates[0].content.parts else None
-                    else:
+                        result = text_attr
+                    # Convert to string if needed
+                    if result is not None:
+                        result = str(result).strip()
+                        logger.info(f"[Gemini] Got text via .text, length: {len(result) if result else 0}")
+                
+                # Method 2: Try candidates path
+                if (not result or not result.strip()) and hasattr(response, 'candidates') and response.candidates:
+                    logger.info(f"[Gemini] Trying candidates path, count: {len(response.candidates)}")
+                    try:
+                        candidate = response.candidates[0]
+                        if hasattr(candidate, 'content'):
+                            content = candidate.content
+                            if hasattr(content, 'parts') and content.parts:
+                                part = content.parts[0]
+                                if hasattr(part, 'text'):
+                                    result = str(part.text).strip()
+                                    logger.info(f"[Gemini] Got text from candidates.parts, length: {len(result) if result else 0}")
+                    except Exception as e:
+                        logger.warning(f"[Gemini] Error extracting from candidates: {e}")
+                
+                # Method 3: Try to convert response to string directly
+                if (not result or not result.strip()):
+                    try:
+                        result = str(response).strip()
+                        if result and len(result) > 10:  # Only use if meaningful
+                            logger.info(f"[Gemini] Got text via str() conversion, length: {len(result)}")
+                        else:
+                            result = None
+                    except:
                         result = None
-                else:
+                
+                if not result or not result.strip():
+                    logger.warning(f"[Gemini] Could not extract text from response, type: {type(response)}")
                     result = None
+                    
             except Exception as e:
+                logger.error(f"[Gemini] Error getting text from response: {e}", exc_info=True)
                 # #region agent log
                 try:
                     import json
@@ -125,6 +158,7 @@ def generate_smart(prompt: str) -> str:
                 time.sleep(1)
                 continue
             
+            logger.info(f"[Gemini] Model {m} succeeded, result length: {len(result)}, preview: {result[:50]}")
             # #region agent log
             try:
                 import json
@@ -134,6 +168,7 @@ def generate_smart(prompt: str) -> str:
             # #endregion
             return result
         except Exception as e:
+            logger.error(f"[Gemini] Model {m} failed: {e}", exc_info=True)
             # #region agent log
             try:
                 import json
@@ -142,10 +177,11 @@ def generate_smart(prompt: str) -> str:
             except: pass
             # #endregion
             time.sleep(1)
+    logger.warning(f"[Gemini] All models failed, returning None")
     # #region agent log
     try:
         import json
-        with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"gemini_init.py:23","message":"generate_smart: all models failed","data":{},"timestamp":int(__import__("time").time()*1000)})+"\n")
     except: pass
     # #endregion

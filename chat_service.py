@@ -99,6 +99,72 @@ class ChatManager:
         return None
 
     @staticmethod
+    async def _call_anthropic(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        """Anthropic Claude API uses different format"""
+        try:
+            headers = {
+                "x-api-key": provider.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json"
+            }
+            # Convert messages format for Anthropic
+            system_msg = next((m["content"] for m in messages if m["role"] == "system"), "")
+            user_messages = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
+            
+            payload = {
+                "model": provider.model,
+                "max_tokens": 150,
+                "messages": user_messages
+            }
+            if system_msg:
+                payload["system"] = system_msg
+            
+            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=8.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "content" in data and len(data["content"]) > 0:
+                    return data["content"][0].get("text", "")
+            else:
+                logger.warning(f"[{provider.name}] Status {resp.status_code}: {resp.text[:100]}")
+        except Exception as e:
+            logger.warning(f"[{provider.name}] Error: {e}")
+        return None
+
+    @staticmethod
+    async def _call_cohere(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        """Cohere API uses different format"""
+        try:
+            headers = {
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json"
+            }
+            # Convert to Cohere format
+            chat_history = []
+            for m in messages[:-1]:  # All except last
+                if m["role"] == "user":
+                    chat_history.append({"role": "USER", "message": m["content"]})
+                elif m["role"] == "assistant":
+                    chat_history.append({"role": "CHATBOT", "message": m["content"]})
+            
+            payload = {
+                "model": provider.model,
+                "message": messages[-1]["content"] if messages else "",
+                "chat_history": chat_history,
+                "max_tokens": 150
+            }
+            
+            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=8.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "text" in data:
+                    return data["text"]
+            else:
+                logger.warning(f"[{provider.name}] Status {resp.status_code}: {resp.text[:100]}")
+        except Exception as e:
+            logger.warning(f"[{provider.name}] Error: {e}")
+        return None
+
+    @staticmethod
     async def _call_generic(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
         # #region agent log
         try:
@@ -169,6 +235,10 @@ class ChatManager:
                 res = None
                 if provider.name == "GigaChat":
                     res = await ChatManager._call_gigachat(http_client, provider, messages)
+                elif provider.name == "Anthropic":
+                    res = await ChatManager._call_anthropic(http_client, provider, messages)
+                elif provider.name == "Cohere":
+                    res = await ChatManager._call_cohere(http_client, provider, messages)
                 else:
                     res = await ChatManager._call_generic(http_client, provider, messages)
                 
@@ -199,8 +269,13 @@ class ChatManager:
         # #endregion
         
         full_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+        logger.info(f"[ChatManager] Trying Gemini fallback, prompt length: {len(full_prompt)}")
         loop = asyncio.get_event_loop()
         res = await loop.run_in_executor(None, lambda: generate_smart(full_prompt))
+        
+        logger.info(f"[ChatManager] Gemini returned: has_result={bool(res)}, is_none={res is None}, type={type(res).__name__}, length={len(res) if res else 0}")
+        if res:
+            logger.info(f"[ChatManager] Gemini result preview: {str(res)[:100]}")
         
         # #region agent log
         try:
