@@ -37,13 +37,14 @@ def _get_kodacode_models() -> List[str]:
     models_env = os.getenv("KODACODE_MODELS", "gpt-4o,claude-sonnet-4-20250514,gemini-2.5-pro")
     return [m.strip() for m in models_env.split(",") if m.strip()]
 
-# === KODACODE (OpenAI-совместимый, бесплатные модели) ===
+# === KODACODE (OpenAI-совместимый) ===
+# ВНИМАНИЕ: KodaCode временно недоступен (404). Отключен.
 KODACODE_CONFIG = AIProviderConfig(
     name="KodaCode",
     api_key=os.getenv("KODACODE_API_KEY", "sk-0"),
     base_url=os.getenv("KODACODE_BASE_URL", "https://api.kodacode.ru/v1"),
     model=os.getenv("KODACODE_MODEL", "gpt-4o"),
-    is_active=True,  # Всегда активен (ключ необязателен)
+    is_active=False,  # Отключен - сервис недоступен
     key_index=0
 )
 
@@ -92,14 +93,12 @@ GIGACHAT_CONFIG = AIProviderConfig(
     is_active=bool(os.getenv("GIGACHAT_CREDENTIALS"))
 )
 
-# 2. HUGGING FACE (Исправленный URL)
-# Используем правильный формат URL для HuggingFace Inference API
+# 2. HUGGING FACE — Новый API router
 HF_CONFIG = AIProviderConfig(
     name="HuggingFace",
     api_key=os.getenv("HF_TOKEN", ""),
-    # Правильный формат URL для HuggingFace Inference API
-    base_url="https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct",
-    model="meta-llama/Meta-Llama-3-8B-Instruct",
+    base_url="https://router.huggingface.co/huggingface",
+    model="meta-llama/Llama-3-8b-instruct",
     is_active=bool(os.getenv("HF_TOKEN"))
 )
 
@@ -113,8 +112,14 @@ OPENROUTER_CONFIG = AIProviderConfig(
     is_active=bool(os.getenv("OPENROUTER_API_KEY"))
 )
 
-# Остальные (Резерв)
-GROQ_CONFIG = AIProviderConfig("Groq", os.getenv("GROQ_API_KEY", ""), "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile", bool(os.getenv("GROQ_API_KEY")))
+# GROQ — Быстрый резерв
+GROQ_CONFIG = AIProviderConfig(
+    name="Groq",
+    api_key=os.getenv("GROQ_API_KEY", ""),
+    base_url="https://api.groq.com/openai/v1/chat/completions",
+    model="llama-3.1-8b-instruct",
+    is_active=bool(os.getenv("GROQ_API_KEY"))
+)
 NOVITA_CONFIG = AIProviderConfig("Novita", os.getenv("NOVITA_API_KEY", ""), "https://api.novita.ai/v3/openai/chat/completions", "meta-llama/llama-3.3-70b-instruct", bool(os.getenv("NOVITA_API_KEY")))
 DEEPSEEK_CONFIG = AIProviderConfig("DeepSeek", os.getenv("DEEPSEEK_API_KEY", ""), "https://api.deepseek.com/chat/completions", "deepseek-chat", bool(os.getenv("DEEPSEEK_API_KEY")))
 
@@ -133,17 +138,17 @@ def get_active_providers() -> List[AIProviderConfig]:
     
     providers = []
     
-    # === ПРИОРИТЕТ 1: KODACODE (Бесплатный OpenAI-совместимый) ===
-    if KODACODE_CONFIG.is_active or True:
-        providers.append(KODACODE_CONFIG)
-        logger.info(f"[AI Config] KodaCode is ACTIVE (base_url: {KODACODE_CONFIG.base_url})")
-    
-    # === ПРИОРИТЕТ 2: GIGACHAT (Сбер) ===
+    # === ПРИОРИТЕТ 1: GIGACHAT (Сбер) ===
     if GIGACHAT_CONFIG.is_active: 
         providers.append(GIGACHAT_CONFIG)
         logger.info(f"[AI Config] GigaChat is ACTIVE")
     else:
         logger.warning(f"[AI Config] GigaChat is INACTIVE")
+    
+    # === ПРИОРИТЕТ 2: Groq (если есть ключ) ===
+    if GROQ_CONFIG.is_active:
+        providers.append(GROQ_CONFIG)
+        logger.info(f"[AI Config] Groq is ACTIVE")
     
     # === ПРИОРИТЕТ 3: OpenRouter бесплатные ===
     if OPENROUTER_MISTRAL_FREE.is_active:
@@ -153,16 +158,17 @@ def get_active_providers() -> List[AIProviderConfig]:
         providers.append(OPENROUTER_LLAMA_FREE)
         logger.info(f"[AI Config] OpenRouter Llama Free is ACTIVE")
     
-    # === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ ===
+    # === ПРИОРИТЕТ 4: HuggingFace ===
+    if HF_CONFIG.is_active:
+        providers.append(HF_CONFIG)
+        logger.info(f"[AI Config] HuggingFace is ACTIVE")
+    
+    # === РЕЗЕРВЫ ===
     if TOGETHER_CONFIG.is_active: providers.append(TOGETHER_CONFIG)
     if PERPLEXITY_CONFIG.is_active: providers.append(PERPLEXITY_CONFIG)
     if COHERE_CONFIG.is_active: providers.append(COHERE_CONFIG)
     if ANTHROPIC_CONFIG.is_active: providers.append(ANTHROPIC_CONFIG)
-    
-    # === РЕЗЕРВЫ (платные) ===
-    if HF_CONFIG.is_active: providers.append(HF_CONFIG)
     if OPENROUTER_CONFIG.is_active: providers.append(OPENROUTER_CONFIG)
-    if GROQ_CONFIG.is_active: providers.append(GROQ_CONFIG)
     if NOVITA_CONFIG.is_active: providers.append(NOVITA_CONFIG)
     if DEEPSEEK_CONFIG.is_active: providers.append(DEEPSEEK_CONFIG)
     
