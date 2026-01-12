@@ -3,50 +3,58 @@ import json
 from typing import Tuple, Optional
 
 try:
-    from google import genai
+    from google.genai import types
 except ImportError:
-    genai = None
+    types = None
 
 from config import Settings
+# Импортируем глобальный клиент, созданный в main.py
+from main import genai_client, HAS_GENAI
 
 logger = logging.getLogger(__name__)
 
 def analyze_message(message: str, settings: Settings) -> Tuple[str, Optional[str]]:
     """
-    Анализирует сообщение с помощью Gemini (синхронно), 
-    опираясь на авто-конфигурацию по GEMINI_API_KEY.
+    Анализирует сообщение (синхронно), используя глобальный genai_client.
+    Использует client.models.generate_content API.
     """
-    if genai is None:
-        logger.warning("GenAI SDK не установлен. Fallback.")
+    if not HAS_GENAI or genai_client is None:
+        logger.warning("Gemini клиент недоступен → fallback на search.")
         return "search", message
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt = f"""Анализируй запрос для музыкального бота: "{message}"
 
-        prompt = f"""Анализируй сообщение для бота-диджея: "{message}"
+Интент: "search" (конкретный трек) или "radio" (микс/жанр/вайб).
 
-Интент: "search" (конкретный трек) или "radio" (микс, жанр, вайб).
-
-Верни ТОЛЬКО JSON:
-{{"intent": "search"|"radio", "query": "запрос для YouTube"}}
+Верни ТОЛЬКО чистый JSON:
+{{"intent": "search" или "radio", "query": "короткий запрос для YouTube"}}
 
 Примеры:
-"давай давай" -> {{"intent": "radio", "query": "энергичные русские хиты"}}
+"давай давай" → {{"intent": "radio", "query": "энергичные хиты"}}
 """
 
-        response = model.generate_content(prompt)
+        # Используем API через созданный клиент
+        response = genai_client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=[types.Part.from_text(prompt)],
+            generation_config=types.GenerationConfig(
+                temperature=0.7, 
+                max_output_tokens=200
+            )
+        )
 
         text = response.text.strip()
         if text.startswith("```json"):
-            text = text[7:].rsplit("```", 1)[0].strip()
+            text = text.split("```json", 1)[1].rsplit("```", 1)[0].strip()
 
         result = json.loads(text)
         intent = result.get("intent", "search")
-        query = result.get("query", message)
+        query = str(result.get("query", message[:100]))
 
         logger.info(f"[Gemini] {message} → {intent} | {query}")
         return intent, query
 
     except Exception as e:
-        logger.error(f"Gemini ошибка: {e}")
-        return "search", message
+        logger.error(f"Gemini ошибка: {str(e)[:200]}")
+        return "search", message[:100]

@@ -35,7 +35,14 @@ GREETINGS = {
 
 async def _do_play(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
     """Ищет и отправляет трек. Основная логика для /play и NLP 'search'."""
-    msg = await context.bot.send_message(chat_id, f"🔎 Ищу: *{query}*...", parse_mode=ParseMode.MARKDOWN)
+    # БЕЗОПАСНАЯ ВЕРСИЯ: Усекаем слишком длинный запрос для отображения
+    short_query = query[:200] + "..." if len(query) > 200 else query
+    msg = await context.bot.send_message(
+        chat_id, 
+        f"🔎 Ищу: *{short_query}*...", 
+        parse_mode=ParseMode.MARKDOWN,
+        disable_notification=True
+    )
     
     tracks = await context.application.downloader.search(query, limit=1)
     
@@ -90,16 +97,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # 2. Если это не болтовня, используем NLP для поиска музыки
-    settings: Settings = context.bot_data.get('settings')
-    if not settings or not settings.GEMINI_API_KEY:
-        return
+    from main import genai_client
+    if not genai_client:
+        return # NLP движок неактивен, игнорируем сообщение
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Запускаем синхронную NLP функцию в отдельном потоке
     loop = asyncio.get_event_loop()
     intent, query = await loop.run_in_executor(
-        None, analyze_message, settings, message_text
+        None, analyze_message, message_text, context.bot_data.get('settings')
     )
     
     logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
@@ -113,7 +120,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
-    report = ["📊 *System Status Report v11 (Final Attempt)*"]
+    report = ["📊 *System Status Report v12 (Final Fix)*"]
     mem = psutil.virtual_memory()
     report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     
