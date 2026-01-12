@@ -59,11 +59,16 @@ async def _do_radio(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE
     asyncio.create_task(context.application.radio_manager.start(chat_id, effective_query))
 
 async def _do_chat_reply(chat_id: int, text: str, user_name: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
-    """Отправляет текстовый ответ через ChatManager"""
+    """Безопасная отправка ответа"""
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    
     response = await ChatManager.get_response(chat_id, text, user_name)
     
-    # Проверяем, не вернул ли AI команду вместо текста
+    # ЗАЩИТА ОТ CRASH: Если ответ пустой, ставим заглушку
+    if not response or not response.strip():
+        response = "..."
+        
+    # Проверка на JSON-команду от AI
     if "{" in response and "command" in response:
         try:
             data = json.loads(response[response.find("{"):response.rfind("}")+1])
@@ -72,8 +77,11 @@ async def _do_chat_reply(chat_id: int, text: str, user_name: str, context: Conte
                 return
         except: pass
     
-    # Обычный ответ
-    await update.message.reply_text(response)
+    try:
+        await update.message.reply_text(response)
+    except BadRequest as e:
+        logger.error(f"Failed to send reply: {e}")
+        # Если даже заглушка не отправилась (редкость), игнорируем
 
 # --- HANDLER ---
 
