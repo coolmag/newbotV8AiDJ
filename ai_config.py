@@ -1,7 +1,10 @@
 import os
+import logging
 from dataclasses import dataclass
 from typing import List
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 def _get_debug_log_path():
     """Get path to debug log file, works on both Windows and Linux"""
@@ -118,8 +121,12 @@ def get_active_providers() -> List[AIProviderConfig]:
     if DEEPSEEK_CONFIG.is_active: providers.append(DEEPSEEK_CONFIG)
     
     logger.info(f"[AI Config] Total active providers: {len(providers)}")
-    for p in providers:
-        logger.info(f"[AI Config]   - {p.name}")
+    if providers:
+        for p in providers:
+            logger.info(f"[AI Config]   - {p.name} (base_url: {p.base_url[:50]}...)")
+    else:
+        logger.error("[AI Config] NO ACTIVE PROVIDERS! Check API keys in environment variables.")
+        logger.error("[AI Config] Available env vars should include: GIGACHAT_CREDENTIALS, HF_TOKEN, OPENROUTER_API_KEY, etc.")
     
     # #region agent log
     try:

@@ -78,6 +78,10 @@ def generate_smart(prompt: str) -> str:
     try:
         available_models = list(client.models.list())
         logger.info(f"[Gemini] Found {len(available_models)} total models")
+        # Log first few model names for debugging
+        if available_models:
+            logger.info(f"[Gemini] First 5 models: {[m.name for m in available_models[:5]]}")
+        
         # Filter models that support generateContent
         for model in available_models:
             if hasattr(model, 'supported_generation_methods') and model.supported_generation_methods:
@@ -87,13 +91,24 @@ def generate_smart(prompt: str) -> str:
                     logger.info(f"[Gemini] Found model with generateContent: {model_name}")
         
         if not MODELS_TO_TRY:
-            # Fallback to common model names with -latest suffix
-            MODELS_TO_TRY = ['gemini-1.5-flash-latest', 'gemini-1.5-pro-latest', 'gemini-pro']
-            logger.warning(f"[Gemini] No models found via list(), using fallback: {MODELS_TO_TRY}")
+            logger.warning(f"[Gemini] No models with generateContent found, trying all models")
+            # Try all models that have a name
+            for model in available_models:
+                if hasattr(model, 'name') and model.name:
+                    model_name = model.name.replace('models/', '') if model.name.startswith('models/') else model.name
+                    if model_name not in MODELS_TO_TRY:
+                        MODELS_TO_TRY.append(model_name)
+                        if len(MODELS_TO_TRY) >= 5:  # Limit to 5 models
+                            break
+            
+            if not MODELS_TO_TRY:
+                logger.error("[Gemini] No models found at all!")
+                return None
     except Exception as e:
-        logger.warning(f"[Gemini] Could not list models: {e}, using fallback list")
-        # Fallback to common model names with -latest suffix
-        MODELS_TO_TRY = ['gemini-1.5-flash-latest', 'gemini-1.5-pro-latest', 'gemini-pro']
+        logger.error(f"[Gemini] Could not list models: {e}", exc_info=True)
+        # Don't use fallback - return None to let other providers try
+        logger.warning("[Gemini] Disabling Gemini to allow other providers to work")
+        return None
     
     if not MODELS_TO_TRY:
         logger.error("[Gemini] No models to try!")
