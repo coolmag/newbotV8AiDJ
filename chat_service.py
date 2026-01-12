@@ -38,6 +38,7 @@ class ChatManager:
 
     @staticmethod
     async def _call_gigachat(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        logger.info(f"[GigaChat] Attempting to call GigaChat API")
         # #region agent log
         try:
             with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
@@ -169,32 +170,49 @@ class ChatManager:
         # #region agent log
         try:
             with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:69","message":"_call_generic ENTRY","data":{"provider":provider.name,"has_api_key":bool(provider.api_key)},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:69","message":"_call_generic ENTRY","data":{"provider":provider.name,"has_api_key":bool(provider.api_key),"base_url":provider.base_url},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
         except: pass
         # #endregion
         try:
             headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
             payload = {"model": provider.model, "messages": messages, "max_tokens": 150}
             
-            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=6.0) # Changed timeout from 8.0 to 6.0
+            logger.info(f"[{provider.name}] Calling {provider.base_url} with model {provider.model}")
+            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=10.0)
+            
+            logger.info(f"[{provider.name}] Response status: {resp.status_code}")
             if resp.status_code == 200:
                 data = resp.json()
-                if "choices" in data: return data["choices"][0]["message"]["content"]
-                if isinstance(data, list) and "generated_text" in data[0]: return data[0]["generated_text"]
+                logger.info(f"[{provider.name}] Response keys: {list(data.keys()) if isinstance(data, dict) else 'list'}")
+                
+                # Try different response formats
+                if "choices" in data and len(data["choices"]) > 0:
+                    result = data["choices"][0]["message"]["content"]
+                    logger.info(f"[{provider.name}] Got result from choices, length: {len(result)}")
+                    return result
+                if isinstance(data, list) and len(data) > 0 and "generated_text" in data[0]:
+                    result = data[0]["generated_text"]
+                    logger.info(f"[{provider.name}] Got result from generated_text, length: {len(result)}")
+                    return result
+                if "text" in data:
+                    result = data["text"]
+                    logger.info(f"[{provider.name}] Got result from text, length: {len(result)}")
+                    return result
+                logger.warning(f"[{provider.name}] Unknown response format: {str(data)[:200]}")
             else:
-                logger.warning(f"[{provider.name}] Status {resp.status_code}: {resp.text[:100]}") # Added logging
+                logger.warning(f"[{provider.name}] Status {resp.status_code}: {resp.text[:200]}") # Added logging
                 # #region agent log
                 try:
                     with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:80","message":"Generic provider failed","data":{"provider":provider.name,"status_code":resp.status_code},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:80","message":"Generic provider failed","data":{"provider":provider.name,"status_code":resp.status_code,"error":resp.text[:200]},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
                 except: pass
                 # #endregion
         except Exception as e: # Catch specific exception
-            logger.warning(f"[{provider.name}] Error: {e}") # Changed to error
+            logger.error(f"[{provider.name}] Error: {e}", exc_info=True) # Changed to error
             # #region agent log
             try:
                 with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:82","message":"Generic provider exception","data":{"provider":provider.name,"error":str(e)[:100]},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:82","message":"Generic provider exception","data":{"provider":provider.name,"error":str(e)[:200]},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
             except: pass
             # #endregion
         return None
@@ -224,7 +242,11 @@ class ChatManager:
 
         # 1. Providers
         async with httpx.AsyncClient(verify=False) as http_client:
-            for provider in get_active_providers():
+            active_providers = get_active_providers()
+            logger.info(f"[ChatManager] Active providers: {[p.name for p in active_providers]}")
+            
+            for provider in active_providers:
+                logger.info(f"[ChatManager] Trying provider: {provider.name}")
                 # #region agent log
                 try:
                     with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
@@ -233,14 +255,22 @@ class ChatManager:
                 # #endregion
                 
                 res = None
-                if provider.name == "GigaChat":
-                    res = await ChatManager._call_gigachat(http_client, provider, messages)
-                elif provider.name == "Anthropic":
-                    res = await ChatManager._call_anthropic(http_client, provider, messages)
-                elif provider.name == "Cohere":
-                    res = await ChatManager._call_cohere(http_client, provider, messages)
-                else:
-                    res = await ChatManager._call_generic(http_client, provider, messages)
+                try:
+                    if provider.name == "GigaChat":
+                        res = await ChatManager._call_gigachat(http_client, provider, messages)
+                    elif provider.name == "Anthropic":
+                        res = await ChatManager._call_anthropic(http_client, provider, messages)
+                    elif provider.name == "Cohere":
+                        res = await ChatManager._call_cohere(http_client, provider, messages)
+                    else:
+                        res = await ChatManager._call_generic(http_client, provider, messages)
+                except Exception as e:
+                    logger.error(f"[ChatManager] Exception calling {provider.name}: {e}")
+                    res = None
+                
+                logger.info(f"[ChatManager] Provider {provider.name} result: has_result={bool(res)}, length={len(res) if res else 0}")
+                if res:
+                    logger.info(f"[ChatManager] Provider {provider.name} result preview: {res[:100]}")
                 
                 # #region agent log
                 try:
@@ -250,6 +280,7 @@ class ChatManager:
                 # #endregion
                 
                 if res and res.strip(): # Проверка на пустую строку
+                    logger.info(f"[ChatManager] Provider {provider.name} succeeded, returning result")
                     history.append({"role": "user", "content": user_text})
                     history.append({"role": "assistant", "content": res})
                     # #region agent log
@@ -259,6 +290,8 @@ class ChatManager:
                     except: pass
                     # #endregion
                     return res
+                else:
+                    logger.warning(f"[ChatManager] Provider {provider.name} failed or returned empty, trying next...")
 
         # 2. Native Gemini
         # #region agent log
@@ -276,6 +309,11 @@ class ChatManager:
         logger.info(f"[ChatManager] Gemini returned: has_result={bool(res)}, is_none={res is None}, type={type(res).__name__}, length={len(res) if res else 0}")
         if res:
             logger.info(f"[ChatManager] Gemini result preview: {str(res)[:100]}")
+            # Additional validation - check for garbage patterns
+            garbage_patterns = ['Recommendlibftorage', 'яatisf', '/smайс', 'ammable', '❄️ammable', 'яatisf/smайс']
+            if any(pattern in str(res) for pattern in garbage_patterns):
+                logger.warning(f"[ChatManager] Gemini result contains garbage patterns, rejecting")
+                res = None
         
         # #region agent log
         try:
@@ -284,17 +322,12 @@ class ChatManager:
         except: pass
         # #endregion
         
-        if res:
-            # #region agent log
-            try:
-                with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"chat_service.py:200","message":"Gemini result (after truthy check)","data":{"has_result":bool(res),"result_length":len(res) if res else 0},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
-            except: pass
-            # #endregion
-            
-            if res and res.strip():
+        if res and res.strip():
+            # Final validation before using
+            if len(res.strip()) >= 3 and not any(p in res for p in ['Recommendlibftorage', 'яatisf/smайс']):
                 history.append({"role": "user", "content": user_text})
                 history.append({"role": "assistant", "content": res})
+                logger.info(f"[ChatManager] Gemini result accepted, returning")
                 # #region agent log
                 try:
                     with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
@@ -302,6 +335,8 @@ class ChatManager:
                 except: pass
                 # #endregion
                 return res
+            else:
+                logger.warning(f"[ChatManager] Gemini result failed final validation, rejecting")
 
         # 3. GARANTEED FALLBACK (Никогда не возвращаем None)
         # #region agent log

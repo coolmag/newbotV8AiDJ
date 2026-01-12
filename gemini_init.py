@@ -13,7 +13,9 @@ def _get_debug_log_path():
 logger = logging.getLogger("gemini")
 HAS_GENAI = False
 client = None
-MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash-exp']
+# Актуальные модели Gemini (обновлено 2025)
+# Используем модели без суффикса -latest, так как они могут не поддерживаться
+MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
 
 try:
     if k := os.getenv("GEMINI_API_KEY"):
@@ -111,19 +113,40 @@ def generate_smart(prompt: str) -> str:
                     except Exception as e:
                         logger.warning(f"[Gemini] Error extracting from candidates: {e}")
                 
-                # Method 3: Try to convert response to string directly
+                # Method 3: Try response.text directly (new SDK format)
                 if (not result or not result.strip()):
                     try:
-                        result = str(response).strip()
-                        if result and len(result) > 10:  # Only use if meaningful
-                            logger.info(f"[Gemini] Got text via str() conversion, length: {len(result)}")
-                        else:
-                            result = None
-                    except:
+                        # Try accessing text as attribute directly
+                        if hasattr(response, 'text') and response.text:
+                            result = str(response.text).strip()
+                            logger.info(f"[Gemini] Got text via direct response.text, length: {len(result) if result else 0}")
+                    except Exception as e:
+                        logger.warning(f"[Gemini] Error in method 3: {e}")
                         result = None
                 
+                # Validate result - check if it looks like garbage
+                if result and result.strip():
+                    result = result.strip()
+                    # Check if result looks like valid text (not garbage from str() conversion)
+                    garbage_patterns = ['Recommendlibftorage', 'яatisf', '/smайс', 'ammable', '❄️ammable', 'яatisf/smайс']
+                    has_garbage = any(pattern in result for pattern in garbage_patterns)
+                    too_many_colons = result.count(':') > 5
+                    too_short = len(result) < 3
+                    too_many_slashes = result.count('/') > 3
+                    # Check for suspicious character patterns (like mixed Cyrillic/Latin garbage)
+                    suspicious_chars = result.count('йс') > 0 and result.count('ammable') > 0
+                    # Check if result is mostly non-printable or weird characters
+                    printable_ratio = sum(1 for c in result if c.isprintable() or c.isspace()) / len(result) if result else 0
+                    
+                    if too_short or too_many_colons or has_garbage or too_many_slashes or suspicious_chars or printable_ratio < 0.7:
+                        logger.warning(f"[Gemini] Result looks like garbage, rejecting: {result[:100]}")
+                        logger.warning(f"[Gemini] Validation details: too_short={too_short}, too_many_colons={too_many_colons}, has_garbage={has_garbage}, too_many_slashes={too_many_slashes}, suspicious_chars={suspicious_chars}, printable_ratio={printable_ratio:.2f}")
+                        result = None
+                    else:
+                        logger.info(f"[Gemini] Result validated successfully, length: {len(result)}")
+                
                 if not result or not result.strip():
-                    logger.warning(f"[Gemini] Could not extract text from response, type: {type(response)}")
+                    logger.warning(f"[Gemini] Could not extract valid text from response, type: {type(response)}")
                     result = None
                     
             except Exception as e:

@@ -27,14 +27,14 @@ GIGACHAT_CONFIG = AIProviderConfig(
     is_active=bool(os.getenv("GIGACHAT_CREDENTIALS"))
 )
 
-# 2. HUGGING FACE (НОВЫЙ URL ROUTER)
-# Мы используем модель Qwen 2.5 (очень умная) через новый адрес роутера.
+# 2. HUGGING FACE (Исправленный URL)
+# Используем правильный формат URL для HuggingFace Inference API
 HF_CONFIG = AIProviderConfig(
     name="HuggingFace",
     api_key=os.getenv("HF_TOKEN", ""),
-    # ВНИМАНИЕ: Новый формат URL для OpenAI-совместимости
-    base_url="https://router.huggingface.co/hf-inference/models/Qwen/Qwen2.5-72B-Instruct/v1/chat/completions",
-    model="Qwen/Qwen2.5-72B-Instruct",
+    # Правильный формат URL для HuggingFace Inference API
+    base_url="https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct",
+    model="meta-llama/Meta-Llama-3-8B-Instruct",
     is_active=bool(os.getenv("HF_TOKEN"))
 )
 
