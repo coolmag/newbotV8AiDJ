@@ -1,33 +1,47 @@
 import os
 from dataclasses import dataclass
+from typing import List
 
 @dataclass
 class AIProviderConfig:
+    name: str
     api_key: str
     base_url: str
     model: str
     is_active: bool
 
-# Настройки для Groq (Самый быстрый бесплатный тир)
-# Получить ключ: https://console.groq.com/keys
+# 1. GROQ (Самый быстрый ответ, идеален для "радио-ведущего")
 GROQ_CONFIG = AIProviderConfig(
+    name="Groq",
     api_key=os.getenv("GROQ_API_KEY", ""),
-    base_url="https://api.groq.com/openai/v1",
+    base_url="https://api.groq.com/openai/v1/chat/completions",
     model="llama3-8b-8192",
     is_active=bool(os.getenv("GROQ_API_KEY"))
 )
 
-# Настройки для DeepSeek (Очень дешевый и умный)
-# Получить ключ: https://platform.deepseek.com/
+# 2. OPENROUTER (Агрегатор, используем Gemini Flash Lite или другую бесплатную)
+OPENROUTER_CONFIG = AIProviderConfig(
+    name="OpenRouter",
+    api_key=os.getenv("OPENROUTER_API_KEY", ""),
+    base_url="https://openrouter.ai/api/v1/chat/completions",
+    model="google/gemini-2.0-flash-lite-preview-02-05:free",
+    is_active=bool(os.getenv("OPENROUTER_API_KEY"))
+)
+
+# 3. DEEPSEEK (Умный и дешевый резерв)
 DEEPSEEK_CONFIG = AIProviderConfig(
+    name="DeepSeek",
     api_key=os.getenv("DEEPSEEK_API_KEY", ""),
-    base_url="https://api.deepseek.com/v1",
+    base_url="https://api.deepseek.com/chat/completions",
     model="deepseek-chat",
     is_active=bool(os.getenv("DEEPSEEK_API_KEY"))
 )
 
-# Выбор активного конфига
-def get_active_config():
-    if GROQ_CONFIG.is_active: return GROQ_CONFIG
-    if DEEPSEEK_CONFIG.is_active: return DEEPSEEK_CONFIG
-    return None # Fallback to G4F
+def get_active_providers() -> List[AIProviderConfig]:
+    """Возвращает список активных провайдеров в порядке приоритета."""
+    providers = []
+    # Порядок в списке определяет приоритет использования
+    if GROQ_CONFIG.is_active: providers.append(GROQ_CONFIG)
+    if OPENROUTER_CONFIG.is_active: providers.append(OPENROUTER_CONFIG)
+    if DEEPSEEK_CONFIG.is_active: providers.append(DEEPSEEK_CONFIG)
+    return providers

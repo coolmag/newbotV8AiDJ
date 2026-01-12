@@ -6,21 +6,21 @@ from collections import deque, defaultdict
 import httpx
 import asyncio
 
-# Импортируем нашу новую логику конфигов
+# Подключаем нашу новую конфигурацию
 from ai_config import get_active_providers, AIProviderConfig
 
 logger = logging.getLogger(__name__)
 
-# Хранилище истории диалогов
+# Храним последние 6 сообщений для контекста
 chat_histories = defaultdict(lambda: deque(maxlen=6))
 chat_modes = defaultdict(lambda: "default")
 
 PERSONAS = {
-    "default": "Ты DJ Aurora. Веселая и дерзкая. Если просят музыку - отвечай JSON: {\"command\": \"radio\", \"query\": \"жанр\"}. Иначе - текст (до 20 слов).",
-    "toxic": "Ты DJ Aurora (Toxic). Дерзкая. Отвечай коротко и язвительно.",
-    "gop": "Ты — Аврора с района. Общаешься дерзко, на 'ты', используешь уличный жаргон.",
-    "chill": "Ты — DJ Aurora на ночном эфире. Спокойная, загадочная, философская.",
-    "quiz": "Ты — Ведущая Викторины Аврора."
+    "default": "Ты DJ Aurora. Веселая и дерзкая. Твоя задача - развлекать и ставить музыку. Если просят включить музыку, отвечай строго JSON форматом: {\"command\": \"radio\", \"query\": \"жанр или исполнитель\"}. Если просто болтают - отвечай текстом (до 20 слов), используй молодежный сленг и эмодзи (🔥, 🎧).",
+    "toxic": "Ты DJ Aurora (Toxic Mode). Ты язвительная, саркастичная и дерзкая. Музыкальный вкус у людей ужасный, и ты не стесняешься об этом говорить. Отвечай коротко и хлестко.",
+    "gop": "Ты — Аврора с района. Общаешься дерзко, на 'ты', используешь уличный жаргон. Любишь басы и четкую музыку.",
+    "chill": "Ты — DJ Aurora на ночном эфире. Голос спокойный, мягкий, немного философский. Тема: космос, релакс, вайб.",
+    "quiz": "Ты — Ведущая Викторины. Задавай вопросы о музыке 90-х и 00-х."
 }
 
 BACKUP_PHRASES = [
@@ -45,34 +45,39 @@ class ChatManager:
         return chat_modes[chat_id]
 
     @staticmethod
-    async def _request_provider(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
-        """Попытка запроса к конкретному провайдеру."""
-        headers = {
-            "Authorization": f"Bearer {provider.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://aurora.radio",
-        }
-        
-        payload = {
-            "model": provider.model,
-            "messages": messages,
-            "max_tokens": 250,
-            "temperature": 0.8
-        }
-
+    async def _call_provider(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        """Попытка запроса к конкретному провайдеру"""
         try:
-            response = await client.post(provider.base_url, json=payload, headers=headers)
+            headers = {
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json",
+                # Некоторые API (OpenRouter) требуют эти заголовки
+                "HTTP-Referer": "https://aurora.radio", 
+                "X-Title": "Aurora Player"
+            }
+            
+            payload = {
+                "model": provider.model,
+                "messages": messages,
+                "max_tokens": 200,
+                "temperature": 0.85
+            }
+
+            # Таймаут 10 секунд на одного провайдера
+            response = await client.post(provider.base_url, json=payload, headers=headers, timeout=10.0)
             
             if response.status_code == 200:
                 data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                return content
-            else:
-                logger.warning(f"[AI] {provider.name} Error: {response.status_code} - {response.text[:100]}")
-                return ""
+                # Стандартный формат OpenAI ответа
+                if "choices" in data and len(data["choices"]) > 0:
+                    content = data["choices"][0]["message"]["content"]
+                    return content
+            
+            logger.warning(f"[AI] {provider.name} failed with status {response.status_code}: {response.text[:100]}")
         except Exception as e:
-            logger.warning(f"[AI] {provider.name} Connection Failed: {e}")
-            return ""
+            logger.warning(f"[AI] {provider.name} connection error: {e}")
+        
+        return None
 
     @staticmethod
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
@@ -80,41 +85,43 @@ class ChatManager:
         history = chat_histories[chat_id]
         system_prompt = get_system_prompt(mode)
         
-        # Формируем контекст
+        # Формируем историю сообщений
         messages = [{"role": "system", "content": system_prompt}]
-        for msg in history: 
+        for msg in history:
             messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        response_text = ""
         providers = get_active_providers()
-        
-        # --- CASCADE LOGIC ---
+        response_text = None
+
         if not providers:
-            logger.error("[AI] No active AI providers configured (Check .env)")
-        
-        async with httpx.AsyncClient(timeout=10.0) as client:
+            logger.error("[AI] No active providers configured! Check .env variables.")
+            return random.choice(BACKUP_PHRASES)
+
+        # === CASCADE LOGIC ===
+        # Перебираем провайдеров, пока один из них не ответит
+        async with httpx.AsyncClient() as client:
             for provider in providers:
-                # Пробуем каждого провайдера по очереди
-                response_text = await ChatManager._request_provider(client, provider, messages)
+                # logger.info(f"[AI] Trying {provider.name}...") 
+                response_text = await ChatManager._call_provider(client, provider, messages)
                 if response_text:
                     logger.info(f"[AI] Success via {provider.name}")
                     break
         
-        # Если все провайдеры упали или нет ключей
+        # Если ВСЕ провайдеры упали
         if not response_text:
-            logger.error("[AI] All providers failed. Using backup phrase.")
-            response_text = random.choice(BACKUP_PHRASES)
+            logger.error("[AI] All providers failed.")
+            return random.choice(BACKUP_PHRASES)
 
-        # Очистка от <think> тегов (DeepSeek/R1)
+        # Очистка от "мыслей" (DeepSeek R1 иногда выдает <think>)
         response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
         
-        # Обработка JSON команд (если ИИ решил включить музыку)
+        # Логика обработки команд JSON (если бот хочет включить музыку)
         if "command" in response_text and "{" in response_text:
-            # Не сохраняем технические команды в историю, чтобы не засорять контекст
+            # Не сохраняем технические команды в историю
             return response_text 
 
-        # Сохраняем в историю
+        # Сохраняем успешный диалог в историю
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": response_text})
         
