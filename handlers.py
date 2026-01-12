@@ -97,7 +97,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # 2. Если это не болтовня, используем NLP для поиска музыки
-    from main import genai_client
+    from main import genai_client # Глобальный клиент из main
     if not genai_client:
         return # NLP движок неактивен, игнорируем сообщение
 
@@ -106,7 +106,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Запускаем синхронную NLP функцию в отдельном потоке
     loop = asyncio.get_event_loop()
     intent, query = await loop.run_in_executor(
-        None, analyze_message, message_text, context.bot_data.get('settings')
+        None, analyze_message, message_text, context.bot_data.get('settings') # settings needed for GEMINI_API_KEY check
     )
     
     logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
