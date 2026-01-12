@@ -15,18 +15,14 @@ chat_histories = defaultdict(lambda: deque(maxlen=6))
 chat_modes = defaultdict(lambda: "default")
 
 PERSONAS = {
-    "default": "Ты DJ Aurora. Веселая, дерзкая. Используй сленг и эмодзи (🔥, 🎧). Отвечай кратко.",
-    "toxic": "Ты DJ Aurora (Toxic). Саркастичная, язвительная. Хами пользователям.",
-    "gop": "Ты Аврора с района. Дерзкая, на 'ты', сленг гопников.",
-    "chill": "Ты Аврора (Chill). Спокойная, философская, мягкая.",
-    "quiz": "Ты Ведущая Викторины. Задавай вопросы про музыку 90-х."
+    "default": "Ты DJ Aurora. Веселая, дерзкая. Отвечай кратко.",
+    "toxic": "Ты DJ Aurora (Toxic). Саркастичная, язвительная. Хами.",
+    "gop": "Ты Аврора с района. Дерзкая.",
+    "chill": "Ты Аврора (Chill). Спокойная.",
+    "quiz": "Ты Ведущая Викторины."
 }
 
-BACKUP_PHRASES = [
-    "Связь с космосом барахлит... 🎧",
-    "Нейросеть перезагружается...",
-    "Сигнал потерян... 🎶"
-]
+BACKUP_PHRASES = ["Связь с космосом барахлит... 🎧", "Сигнал потерян... 🎶"]
 
 def get_system_prompt(mode):
     return PERSONAS.get(mode, PERSONAS["default"]) + " (Language: Russian, Max length: 20 words)"
@@ -43,32 +39,20 @@ class ChatManager:
     @staticmethod
     async def _call_provider(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
         try:
-            headers = {
-                "Authorization": f"Bearer {provider.api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://aurora.radio", 
-                "X-Title": "Aurora"
-            }
+            headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
             payload = {"model": provider.model, "messages": messages, "max_tokens": 150}
-            
-            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=8.0)
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
-            logger.warning(f"[AI] {provider.name} error {resp.status_code}: {resp.text[:50]}")
-        except Exception as e:
-            logger.warning(f"[AI] {provider.name} failed: {e}")
+            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=5.0)
+            if resp.status_code == 200: return resp.json()["choices"][0]["message"]["content"]
+        except: pass
         return None
 
     @staticmethod
     async def _call_native_gemini(messages: list) -> str:
-        """Резервный вызов через библиотеку google-generativeai"""
         if not HAS_GENAI or not genai: return None
         try:
-            # Преобразуем формат сообщений OpenAI -> Gemini
-            prompt = messages[0]["content"] + "\n\n" # System prompt
-            prompt += f"User: {messages[-1]['content']}\nAssistant:"
-            
-            model = genai.GenerativeModel("gemini-1.5-flash") # Стандартная модель
+            prompt = messages[0]["content"] + "\n\n" + f"User: {messages[-1]['content']}\nAssistant:"
+            # ИСПРАВЛЕНИЕ: Только 'gemini-pro' работает стабильно здесь
+            model = genai.GenerativeModel("gemini-pro")
             resp = await model.generate_content_async(prompt)
             return resp.text
         except Exception as e:
