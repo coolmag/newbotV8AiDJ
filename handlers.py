@@ -97,11 +97,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # Запускаем синхронную функцию в отдельном потоке, чтобы не блокировать asyncio
-    loop = asyncio.get_event_loop()
-    intent, query = await loop.run_in_executor(
-        None, analyze_message, message_text, settings
-    )
+    # Прямой вызов, так как analyze_message снова async
+    intent, query = await analyze_message(message_text, settings)
     
     logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
     

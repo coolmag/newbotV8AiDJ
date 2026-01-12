@@ -2,56 +2,54 @@ import logging
 import json
 from typing import Tuple, Optional
 
-import google.genai as genai
+try:
+    import genai
+except ImportError:
+    genai = None
 
 from config import Settings
 
 logger = logging.getLogger(__name__)
 
-def analyze_message(message: str, settings: Settings) -> Tuple[str, Optional[str]]:
+async def analyze_message(message: str, settings: Settings) -> Tuple[str, Optional[str]]:
     """
-    Анализирует сообщение пользователя с помощью Gemini (синхронно).
-    Возвращает (intent, query)
+    Анализирует сообщение пользователя с помощью Gemini, используя правильный SDK (genai).
     """
-    if not settings.GEMINI_API_KEY:
-        logger.warning("GenAI не настроен (нет ключа). Fallback на прямой поиск.")
+    if not genai or not settings.GEMINI_API_KEY:
+        logger.warning("GenAI не доступен (нет ключа или SDK). Fallback на прямой поиск.")
         return "search", message
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
 
-        prompt = f"""Ты — умный музыкальный бот-диджей.
-Проанализируй сообщение пользователя: "{message}"
+        prompt = f"""Ты музыкальный AI-диджей.
+Сообщение: "{message}"
 
 Определи интент:
-- "search" — если хочет конкретный трек, артиста, песню
-- "radio" — если хочет включить радио, микс, волну, жанр, вайб, "давай нашу", "включи что-то", "будет движение"
+- "search" — конкретный трек/артист
+- "radio" — микс, жанр, вайб, "давай", "включи что-то", "будет движение"
 
-Верни ТОЛЬКО чистый JSON без каких-либо комментариев и markdown:
-{{"intent": "search" или "radio", "query": "уточнённый поисковый запрос для YouTube"}}
+Верни ТОЛЬКО JSON:
+{{"intent": "search" или "radio", "query": "готовый запрос для YouTube"}}
 
 Примеры:
-"давай нашу" -> {{"intent": "radio", "query": "русские хиты 2020-х"}}
-"включи рок" -> {{"intent": "radio", "query": "classic rock mix"}}
-"найди песню про любовь" -> {{"intent": "search", "query": "песня про любовь"}}
-"будет движение?" -> {{"intent": "radio", "query": "энергичная танцевальная музыка"}}
+"давай давай" -> {{"intent": "radio", "query": "энергичные русские хиты"}}
+"хорошо" -> {{"intent": "radio", "query": "chill расслабляющая музыка"}}
 """
-
-        response = model.generate_content(prompt)
+        # ИСПОЛЬЗУЕМ ASYNC ВЕРСИЮ, ТАК КАК ФУНКЦИЯ АСИНХРОННАЯ
+        response = await model.generate_content_async(prompt)
 
         text = response.text.strip()
-        if '```json' in text:
-            text = text.split('```json')[1].split('```')[0].strip()
-        elif '```' in text:
-            text = text.replace('```', '').strip()
+        if text.startswith("```json"):
+            text = text[7:].split("```")[0].strip()
 
         result = json.loads(text)
         intent = result.get("intent", "search")
-        query = result.get("query", message.strip())
+        query = result.get("query", message)
 
-        logger.info(f"Gemini анализ: '{message}' → intent={intent}, query={query}")
+        logger.info(f"[Gemini] {message} → {intent} | {query}")
         return intent, query
 
     except Exception as e:
-        logger.error(f"Ошибка анализа Gemini: {e}")
+        logger.error(f"Gemini ошибка: {e}")
         return "search", message

@@ -33,17 +33,20 @@ async def lifespan(app: FastAPI):
     logger.info("⚡ Application starting up...")
     settings = get_settings()
 
-    # --- CORRECT FINAL: Инициализация Google GenAI SDK (версия 2026) ---
-    if settings.GEMINI_API_KEY:
-        try:
-            # Прямая конфигурация модуля. Она глобальна для всего приложения.
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            logger.info("✅ Google GenAI SDK configured successfully (Final Fix).")
-        except Exception as e:
-            logger.error(f"❌ Failed to configure GenAI SDK: {e}")
-    else:
-        logger.warning("GEMINI_API_KEY not found → NLP features will be disabled.")
-    
+    # --- FINAL CORRECT v3: Инициализация Google GenAI SDK (пакет google-genai) ---
+    try:
+        import genai
+        if settings.GEMINI_API_KEY:
+            try:
+                genai.configure(api_key=settings.GEMINI_API_KEY)
+                logger.info("✅ Google GenAI SDK successfully configured (import 'genai').")
+            except Exception as e:
+                logger.error(f"❌ Failed to configure GenAI SDK: {e}")
+        else:
+            logger.warning("GEMINI_API_KEY not found → NLP features will be disabled.")
+    except ImportError:
+        logger.error("❌ 'google-genai' package not found. NLP features will be disabled.")
+
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
     
