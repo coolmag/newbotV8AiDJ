@@ -149,7 +149,7 @@ async def radio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.application.radio_manager.stop(update.effective_chat.id)
-    await update.message.reply_text("🛑 Стоп.")
+    await context.bot.send_message(update.effective_chat.id, "🛑 Стоп.")
 
 def setup_handlers(app, radio, settings, downloader):
     app.downloader = downloader

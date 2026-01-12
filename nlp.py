@@ -44,35 +44,19 @@ def analyze_message(message: str) -> Tuple[str, Optional[str]]:
         return _heuristic_fallback(message)
 
     try:
-        # ИСПРАВЛЕНИЕ: Используем 'gemini-pro' - самую стабильную модель для этой библиотеки
-        model = genai.GenerativeModel("gemini-pro")
+        # Пробуем универсальную модель
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        prompt = f"""Analyze: "{message}"
 
-        prompt = f"""You are a Music AI Assistant. Analyze this user message: "{message}"
-
-Classify into one of 3 INTENTS:
-1. "search" -> Explicit request for a specific song, artist, video (e.g. "play numb", "metallica", "включи цоя").
-2. "radio" -> Request for a genre, mood, playlist (e.g. "rock music", "party mix", "давай радио").
-3. "chat" -> Conversational messages, greetings, questions (e.g. "hello", "how are you", "quiz", "ну как там?", "привет").
-
-Return JSON ONLY:
-{{"intent": "search"|"radio"|"chat", "query": "search query or empty"}}
-"""
+JSON: {{"intent": "search"|"radio"|"chat", "query": "text"}}"""
+        
         response = model.generate_content([prompt])
-        text = response.text.strip()
+        text = response.text.replace("```json", "").replace("```", "").strip()
         
-        # Чистка JSON
-        if "```" in text:
-            text = text.replace("```json", "").replace("```", "").strip()
-        
-        try:
-            result = json.loads(text)
-            intent = result.get("intent", "chat") # Default to chat to be safe
-            query = result.get("query", message[:100])
-            return intent, query
-        except json.JSONDecodeError:
-            logger.warning(f"[NLP] JSON Parse Error: {text}. Switching to heuristic.")
-            return _heuristic_fallback(message)
+        data = json.loads(text)
+        return data.get("intent", "chat"), data.get("query", message[:100])
 
     except Exception as e:
-        logger.warning(f"[NLP] API Error: {e}. Switching to heuristic.")
+        logger.warning(f"NLP Error: {e}")
         return _heuristic_fallback(message)
