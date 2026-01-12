@@ -1,6 +1,13 @@
 import os
 from dataclasses import dataclass
 from typing import List
+from pathlib import Path
+
+def _get_debug_log_path():
+    """Get path to debug log file, works on both Windows and Linux"""
+    base_dir = Path(__file__).resolve().parent
+    log_path = base_dir / ".cursor" / "debug.log"
+    return str(log_path)
 
 @dataclass
 class AIProviderConfig:
@@ -64,7 +71,7 @@ def get_active_providers() -> List[AIProviderConfig]:
     # #region agent log
     try:
         import json
-        with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"ai_config.py:49","message":"get_active_providers","data":{"count":len(providers),"active":[(p.name, p.is_active) for p in [GIGACHAT_CONFIG,HF_CONFIG,OPENROUTER_CONFIG,GROQ_CONFIG,NOVITA_CONFIG,DEEPSEEK_CONFIG]]},"timestamp":int(__import__("time").time()*1000)})+"\n")
     except: pass
     # #endregion

@@ -4,10 +4,18 @@ import uuid
 import httpx
 import asyncio
 import json
+import os
+from pathlib import Path
 from collections import deque, defaultdict
 
 from ai_config import get_active_providers, AIProviderConfig
 from gemini_init import generate_smart, HAS_GENAI
+
+def _get_debug_log_path():
+    """Get path to debug log file, works on both Windows and Linux"""
+    base_dir = Path(__file__).resolve().parent
+    log_path = base_dir / ".cursor" / "debug.log"
+    return str(log_path)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +40,7 @@ class ChatManager:
     async def _call_gigachat(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
         # #region agent log
         try:
-            with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:31","message":"_call_gigachat ENTRY","data":{"has_api_key":bool(provider.api_key)},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
         except: pass
         # #endregion
@@ -56,7 +64,7 @@ class ChatManager:
                 logger.warning(f"[GigaChat] Auth Fail: {token_resp.status_code}") # Added logging
                 # #region agent log
                 try:
-                    with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                         f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:49","message":"GigaChat auth failed","data":{"status_code":token_resp.status_code},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
                 except: pass
                 # #endregion
@@ -76,7 +84,7 @@ class ChatManager:
                 logger.warning(f"[GigaChat] Chat Fail: {chat_resp.status_code}") # Added logging
                 # #region agent log
                 try:
-                    with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                         f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:63","message":"GigaChat chat failed","data":{"status_code":chat_resp.status_code},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
                 except: pass
                 # #endregion
@@ -84,7 +92,7 @@ class ChatManager:
             logger.error(f"[GigaChat] Error: {e}") # Changed to error
             # #region agent log
             try:
-                with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                     f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:65","message":"GigaChat exception","data":{"error":str(e)[:100]},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
             except: pass
             # #endregion
@@ -94,7 +102,7 @@ class ChatManager:
     async def _call_generic(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
         # #region agent log
         try:
-            with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:69","message":"_call_generic ENTRY","data":{"provider":provider.name,"has_api_key":bool(provider.api_key)},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
         except: pass
         # #endregion
@@ -111,7 +119,7 @@ class ChatManager:
                 logger.warning(f"[{provider.name}] Status {resp.status_code}: {resp.text[:100]}") # Added logging
                 # #region agent log
                 try:
-                    with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                         f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:80","message":"Generic provider failed","data":{"provider":provider.name,"status_code":resp.status_code},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
                 except: pass
                 # #endregion
@@ -119,7 +127,7 @@ class ChatManager:
             logger.warning(f"[{provider.name}] Error: {e}") # Changed to error
             # #region agent log
             try:
-                with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                     f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:82","message":"Generic provider exception","data":{"provider":provider.name,"error":str(e)[:100]},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
             except: pass
             # #endregion
@@ -129,7 +137,7 @@ class ChatManager:
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
         # #region agent log
         try:
-            with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"chat_service.py:86","message":"get_response ENTRY","data":{"chat_id":chat_id,"user_text":user_text[:50],"user_name":user_name},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
         except: pass
         # #endregion
@@ -143,7 +151,7 @@ class ChatManager:
         # #region agent log
         try:
             providers = get_active_providers()
-            with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"chat_service.py:95","message":"Active providers check","data":{"count":len(providers),"providers":[p.name for p in providers],"has_gemini":HAS_GENAI},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
         except: pass
         # #endregion
@@ -153,7 +161,7 @@ class ChatManager:
             for provider in get_active_providers():
                 # #region agent log
                 try:
-                    with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                         f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:98","message":"Trying provider","data":{"provider":provider.name},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
                 except: pass
                 # #endregion
@@ -166,7 +174,7 @@ class ChatManager:
                 
                 # #region agent log
                 try:
-                    with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                         f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"chat_service.py:102","message":"Provider result","data":{"provider":provider.name,"has_result":bool(res),"result_length":len(res) if res else 0},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
                 except: pass
                 # #endregion
@@ -176,7 +184,7 @@ class ChatManager:
                     history.append({"role": "assistant", "content": res})
                     # #region agent log
                     try:
-                        with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                             f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"E","location":"chat_service.py:105","message":"get_response EXIT (provider success)","data":{"provider":provider.name,"response_preview":res[:50]},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
                     except: pass
                     # #endregion
@@ -185,18 +193,27 @@ class ChatManager:
         # 2. Native Gemini
         # #region agent log
         try:
-            with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"chat_service.py:110","message":"Trying Gemini fallback","data":{"has_genai":HAS_GENAI},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
         except: pass
         # #endregion
         
         full_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
         loop = asyncio.get_event_loop()
-        if res := await loop.run_in_executor(None, lambda: generate_smart(full_prompt)):
+        res = await loop.run_in_executor(None, lambda: generate_smart(full_prompt))
+        
+        # #region agent log
+        try:
+            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"chat_service.py:195","message":"Gemini result (before check)","data":{"has_result":bool(res),"is_none":res is None,"result_type":type(res).__name__,"result_length":len(res) if res else 0,"result_preview":str(res)[:100] if res else None},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
+        except: pass
+        # #endregion
+        
+        if res:
             # #region agent log
             try:
-                with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"chat_service.py:111","message":"Gemini result","data":{"has_result":bool(res),"result_length":len(res) if res else 0},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
+                with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"chat_service.py:200","message":"Gemini result (after truthy check)","data":{"has_result":bool(res),"result_length":len(res) if res else 0},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
             except: pass
             # #endregion
             
@@ -205,7 +222,7 @@ class ChatManager:
                 history.append({"role": "assistant", "content": res})
                 # #region agent log
                 try:
-                    with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                         f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"E","location":"chat_service.py:114","message":"get_response EXIT (Gemini success)","data":{"response_preview":res[:50]},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
                 except: pass
                 # #endregion
@@ -214,7 +231,7 @@ class ChatManager:
         # 3. GARANTEED FALLBACK (Никогда не возвращаем None)
         # #region agent log
         try:
-            with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"E","location":"chat_service.py:117","message":"get_response EXIT (fallback)","data":{"fallback_used":True},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
         except: pass
         # #endregion
