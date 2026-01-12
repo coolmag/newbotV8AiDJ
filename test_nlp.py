@@ -2,28 +2,29 @@ import pytest
 from unittest.mock import Mock, patch
 
 from nlp import analyze_message, _heuristic_fallback
-from gemini_init import genai, HAS_GENAI # Импорт глобальных флагов и модуля genai для мокирования
+from gemini_init import client, HAS_GENAI # Импорт глобальных флагов и клиента genai для мокирования
 
 # Пропускаем тесты, если SDK не установлен
-pytestmark = pytest.mark.skipif(not HAS_GENAI, reason="google-generativeai SDK not imported or configured")
+pytestmark = pytest.mark.skipif(not HAS_GENAI, reason="google-genai SDK not imported or configured")
 
 def test_analyze_message_search_intent():
     """Тестирует успешный happy-path с интентом 'search'."""
     mock_response = Mock()
     mock_response.text = '{"intent": "search", "query": "Linkin Park Numb"}'
     
-    mock_model_instance = Mock()
-    mock_model_instance.generate_content.return_value = mock_response
+    mock_client_instance = Mock()
+    mock_client_instance.models.generate_content.return_value = mock_response
     
-    with patch('google.generativeai.GenerativeModel', return_value=mock_model_instance) as mock_model_class:
+    with patch('gemini_init.client', mock_client_instance):
         with patch('gemini_init.HAS_GENAI', True), \
-             patch('gemini_init.GEMINI_KEY', "fake-key"), \
-             patch('gemini_init.genai', genai):
+             patch('gemini_init.client', mock_client_instance): # Ensure client is mocked globally
             
             intent, query = analyze_message(message="play numb")
             
-            mock_model_class.assert_called_once_with("gemini-1.5-flash") # Model name as per nlp.py
-            mock_model_instance.generate_content.assert_called_once()
+            mock_client_instance.models.generate_content.assert_called_once_with(
+                model='gemini-2.0-flash-exp',
+                contents="Analyze this user message: \"play numb\"\n\nClassify into 3 INTENTS:\n1. \"search\" -> Request for specific song/artist.\n2. \"radio\" -> Request for genre/vibe.\n3. \"chat\" -> Conversational/greetings.\n\nReturn JSON ONLY:\n{\"intent\": \"search\"|\"radio\"|\"chat\", \"query\": \"search query or empty\"}"
+            )
             
             assert intent == "search"
             assert query == "Linkin Park Numb"
@@ -33,30 +34,32 @@ def test_analyze_message_chat_intent():
     mock_response = Mock()
     mock_response.text = '{"intent": "chat", "query": ""}'
     
-    mock_model_instance = Mock()
-    mock_model_instance.generate_content.return_value = mock_response
+    mock_client_instance = Mock()
+    mock_client_instance.models.generate_content.return_value = mock_response
     
-    with patch('google.generativeai.GenerativeModel', return_value=mock_model_instance) as mock_model_class:
+    with patch('gemini_init.client', mock_client_instance):
         with patch('gemini_init.HAS_GENAI', True), \
-             patch('gemini_init.GEMINI_KEY', "fake-key"), \
-             patch('gemini_init.genai', genai):
+             patch('gemini_init.client', mock_client_instance):
             
             intent, query = analyze_message(message="how are you?")
             
-            mock_model_class.assert_called_once_with("gemini-1.5-flash") # Model name as per nlp.py
-            mock_model_instance.generate_content.assert_called_once()
+            mock_client_instance.models.generate_content.assert_called_once_with(
+                model='gemini-2.0-flash-exp',
+                contents="Analyze this user message: \"how are you?\"\n\nClassify into 3 INTENTS:\n1. \"search\" -> Request for specific song/artist.\n2. \"radio\" -> Request for genre/vibe.\n3. \"chat\" -> Conversational/greetings.\n\nReturn JSON ONLY:\n{\"intent\": \"search\"|\"radio\"|\"chat\", \"query\": \"search query or empty\"}"
+            )
             
             assert intent == "chat"
             assert query == ""
 
 def test_analyze_message_fallback_on_api_error():
     """Тестирует fallback к эвристике при ошибке Gemini API."""
-    with patch('google.generativeai.GenerativeModel', side_effect=Exception("API is down")):
+    mock_client_instance = Mock()
+    mock_client_instance.models.generate_content.side_effect = Exception("API is down")
+
+    with patch('gemini_init.client', mock_client_instance):
         with patch('gemini_init.HAS_GENAI', True), \
-             patch('gemini_init.GEMINI_KEY', "fake-key"), \
-             patch('gemini_init.genai', genai):
+             patch('gemini_init.client', mock_client_instance):
             
-            # Эвристика должна сработать и вернуть "chat" для короткого сообщения без ключевых слов
             intent, query = analyze_message(message="ошибка")
             assert intent == "chat" # Default fallback is chat now
             assert query == ""
@@ -91,7 +94,7 @@ def test_analyze_message_no_api_key_global():
 @patch('gemini_init.HAS_GENAI', False) # Мокаем, что SDK не импортирован
 def test_analyze_message_sdk_not_imported():
     """Тестирует fallback, если SDK 'genai' не импортирован."""
-    with patch('gemini_init.genai', None): # SDK не импортирован, genai=None
+    with patch('gemini_init.client', None): # SDK не импортирован, client=None
         intent, query = analyze_message(message="нет SDK")
         assert intent == "chat" # Эвристика по умолчанию для короткого сообщения
         assert query == ""

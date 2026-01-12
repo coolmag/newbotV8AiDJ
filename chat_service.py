@@ -60,7 +60,7 @@ class ChatManager:
             response = await loop.run_in_executor(
                 None,
                 lambda: client.models.generate_content(
-                    model='gemini-1.5-flash',
+                    model='gemini-2.0-flash-exp',
                     contents=history_text
                 )
             )

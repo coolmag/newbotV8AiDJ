@@ -33,9 +33,9 @@ Classify into 3 INTENTS:
 Return JSON ONLY:
 {{"intent": "search"|"radio"|"chat", "query": "search query or empty"}}
 """
-        # Вызов через новый SDK (google-genai)
+        # ИСПОЛЬЗУЕМ НОВУЮ МОДЕЛЬ
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash-exp', 
             contents=prompt
         )
         
