@@ -2,19 +2,23 @@ import logging
 import json
 from typing import Tuple, Optional
 
-# Импортируем новый клиент
+# Импортируем новый клиент из gemini_init
 from gemini_init import client, HAS_GENAI
 
 logger = logging.getLogger(__name__)
 
 def analyze_message(message: str) -> Tuple[str, Optional[str]]:
-    # Эвристика на случай отключения
+    # Эвристика на случай отключения или ошибки
     def heuristic():
         msg = message.lower()
-        if any(x in msg for x x in ['play', 'включи', 'найди', 'играй']): return "search", message
-        if len(message) > 40: return "search", message
+        # ИСПРАВЛЕНО: 'for x in' вместо 'for x x in'
+        if any(x in msg for x in ['play', 'включи', 'найди', 'играй']): 
+            return "search", message
+        if len(message) > 40: 
+            return "search", message
         return "chat", ""
 
+    # Если клиент не инициализирован
     if not HAS_GENAI or not client:
         return heuristic()
 
@@ -29,8 +33,7 @@ Classify into 3 INTENTS:
 Return JSON ONLY:
 {{"intent": "search"|"radio"|"chat", "query": "search query or empty"}}
 """
-        # НОВЫЙ СИНТАКСИС ВЫЗОВА
-        # Используем самую быструю модель
+        # Вызов через новый SDK (google-genai)
         response = client.models.generate_content(
             model='gemini-1.5-flash',
             contents=prompt
