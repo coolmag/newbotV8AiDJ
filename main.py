@@ -5,6 +5,7 @@ import time
 from datetime import timedelta
 import os
 import json
+import google.generativeai as genai
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -33,6 +34,14 @@ async def lifespan(app: FastAPI):
     try: settings = get_settings()
     except: settings = Settings()
     
+    # Инициализация Gemini API
+    if settings.GEMINI_API_KEY:
+        try:
+            genai.configure(api_key=settings.GEMINI_API_KEY)
+            logger.info("✅ Gemini API configured successfully.")
+        except Exception as e:
+            logger.error(f"❌ Failed to configure Gemini API: {e}")
+
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
     

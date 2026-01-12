@@ -19,6 +19,7 @@ from radio import RadioManager
 from config import Settings
 from youtube import YouTubeDownloader
 from chat_service import ChatManager, PERSONAS
+from nlp import analyze_message # <-- НОВЫЙ ИМПОРТ
 
 logger = logging.getLogger("handlers")
 
@@ -30,26 +31,108 @@ GREETINGS = {
     "quiz": ["Время викторины! 🎯", "Я готова задавать вопросы!"]
 }
 
+# --- ВНУТРЕННИЕ ИСПОЛНИТЕЛИ (REFACTORED LOGIC) ---
+
+async def _do_play(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
+    """Ищет и отправляет трек. Основная логика для /play и NLP 'search'."""
+    msg = await context.bot.send_message(chat_id, f"🔎 Ищу: *{query}*...", parse_mode=ParseMode.MARKDOWN)
+    
+    tracks = await context.application.downloader.search(query, limit=1)
+    
+    if tracks:
+        await msg.delete()
+        dl_res = await context.application.downloader.download(tracks[0].identifier)
+        if dl_res.success and dl_res.file_path:
+            with open(dl_res.file_path, 'rb') as f:
+                await context.bot.send_audio(chat_id, f, title=dl_res.track_info.title, performer=dl_res.track_info.artist)
+        else:
+             await context.bot.send_message(chat_id, f"😕 Не удалось скачать трек: {dl_res.error}")
+    else:
+        await msg.edit_text("😕 Не нашла ничего по запросу.")
+
+async def _do_radio(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
+    """Запускает радио. Основная логика для /radio и NLP 'radio'."""
+    effective_query = query or "случайные популярные треки"
+    await context.bot.send_message(chat_id, f"🎧 Окей! Включаю радио-волну: *{effective_query}*", parse_mode=ParseMode.MARKDOWN)
+    asyncio.create_task(context.application.radio_manager.start(chat_id, effective_query))
+
+
+# --- HANDLERS ---
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """НОВЫЙ ОБРАБОТЧИК ДЛЯ ОБЫЧНОГО ТЕКСТА (NLP)"""
+    message_text = update.effective_message.text
+    if not message_text or len(message_text) < 3: # Игнорируем слишком короткие сообщения
+        return
+        
+    # --- Логика AI DJ из chat_service ---
+    is_private = update.effective_chat.type == ChatType.PRIVATE
+    is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+    is_mention = any(w in message_text.lower() for w in ["аврора", "aurora", "бот", "dj"])
+
+    if is_private or is_reply or is_mention:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        user_name = update.effective_user.first_name
+        response = await ChatManager.get_response(update.effective_chat.id, message_text, user_name)
+        
+        try:
+            # Пытаемся распарсить JSON-команду от AI
+            if "{" in response and "command" in response:
+                data = json.loads(response[response.find("{"):response.rfind("}")+1])
+                if data.get("command") == "radio":
+                    query = data.get("query", "random")
+                    await _do_radio(update.effective_chat.id, query, context, update)
+                    return
+        except json.JSONDecodeError:
+            # Если не JSON, значит это обычный текстовый ответ
+            await update.message.reply_text(response)
+            return
+        except Exception as e:
+            logger.error(f"Error processing AI command: {e}")
+
+        # Если это был не JSON, отправляем как текст
+        if "{" not in response:
+            await update.message.reply_text(response)
+        return # Завершаем, если AI DJ ответил
+
+    # --- Логика NLP для поиска музыки (если AI DJ не ответил) ---
+    settings: Settings = context.application.settings
+    # Не анализируем, если нет ключа Gemini - это будет просто тратой времени
+    if not settings.GEMINI_API_KEY:
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    intent, query = await analyze_message(message_text, settings)
+    
+    logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
+    
+    if intent == 'search':
+        await _do_play(update.effective_chat.id, query, context, update)
+    elif intent == 'radio':
+        await _do_radio(update.effective_chat.id, query, context, update)
+
+
 # --- DIAGNOSTICS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 *Запуск диагностики...*", parse_mode=ParseMode.MARKDOWN)
-    
     report = ["📊 *System Status Report*"]
-    
     mem = psutil.virtual_memory()
     report.append(f"🖥 *Server:* CPU {psutil.cpu_percent()}% | RAM {mem.percent}%")
     
-    try:
-        start_ai = time.time()
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get("https://openrouter.ai/api/v1/models")
-            ai_lat = round((time.time() - start_ai) * 1000)
-            if resp.status_code == 200:
-                report.append(f"🧠 *AI API:* ✅ Online ({ai_lat}ms)")
-            else:
-                report.append(f"🧠 *AI API:* ⚠️ Error {resp.status_code}")
-    except Exception as e:
-        report.append(f"🧠 *AI API:* ❌ Unreachable ({str(e)})")
+    # Проверка AI провайдеров
+    from ai_config import get_active_providers
+    providers = get_active_providers()
+    if providers:
+        provider_names = ', '.join([p.name for p in providers])
+        report.append(f"🧠 *AI Cascade:* ✅ {provider_names}")
+    else:
+        report.append(f"🧠 *AI Cascade:* ❌ No active providers")
+    
+    # Проверка NLP
+    if context.application.settings.GEMINI_API_KEY:
+        report.append("✨ *NLP Engine:* ✅ Gemini Active")
+    else:
+        report.append("✨ *NLP Engine:* ❌ Inactive (no key)")
 
     active_sessions = len(context.application.radio_manager._sessions)
     report.append(f"📻 *Radio:* {active_sessions} active streams")
@@ -60,31 +143,22 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     current_mode = ChatManager.get_mode(chat_id)
-    text = (
-        "🛠 *Панель Администратора*\n\n"
-        f"🤖 Текущий режим: *{current_mode.upper()}*\n"
-        "Выберите личность:"
-    )
+    text = f"🤖 Текущий режим AI DJ: *{current_mode.upper()}*\nВыберите личность:"
     keyboard = []
     row = []
     for mode in PERSONAS.keys():
         btn_text = f"✅ {mode.upper()}" if mode == current_mode else mode.upper()
         row.append(InlineKeyboardButton(btn_text, callback_data=f"set_mode|{mode}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
+        if len(row) == 2: keyboard.append(row); row = []
     if row: keyboard.append(row)
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")])
-    
     markup = InlineKeyboardMarkup(keyboard)
     
     if update.message:
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
     elif update.callback_query:
-        try:
-            await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
-        except BadRequest:
-            pass # Игнорируем, если ничего не изменилось
+        try: await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+        except BadRequest: pass
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -93,7 +167,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data == "close_admin":
         await query.delete_message()
-        
     elif data.startswith("set_mode|"):
         new_mode = data.split("|")[1]
         ChatManager.set_mode(update.effective_chat.id, new_mode)
@@ -101,14 +174,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         greeting = random.choice(GREETINGS.get(new_mode, GREETINGS["default"]))
         await context.bot.send_message(update.effective_chat.id, greeting)
 
-# --- COMMANDS ---
+# --- COMMANDS (Теперь это обертки) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = context.application.settings
     url = settings.BASE_URL
-    text = "🎧 *Aurora v53*\n\n/radio — Эфир\n/admin — Настройки ИИ\n/status — Диагностика"
+    text = "🎧 *Aurora AI* (v9.0 NLP)\n\nПросто напиши, что хочешь послушать.\nНапример: 'включи фонк' или 'поставь queen a kind of magic'\n\n/radio — случайная волна\n/admin — сменить характер AI DJ"
     kb = []
     if url and url.startswith("http"):
-        kb.append([InlineKeyboardButton("🎧 Web App", web_app=WebAppInfo(url=url))])
+        kb.append([InlineKeyboardButton("🌍 Web App", web_app=WebAppInfo(url=url))])
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,81 +189,29 @@ async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         await update.message.reply_text("Пример: `/play Numb`", parse_mode=ParseMode.MARKDOWN)
         return
-    msg = await update.message.reply_text(f"🔎 Ищу: *{query}*...", parse_mode=ParseMode.MARKDOWN)
-    tracks = await context.application.downloader.search(query, limit=1)
-    if tracks:
-        await msg.delete()
-        await _send_track(context, update.effective_chat.id, tracks[0].identifier)
-    else:
-        await msg.edit_text("😕 Не нашла.")
+    await _do_play(update.effective_chat.id, query, context, update)
 
 async def radio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎲 Настраиваю частоту...")
-    asyncio.create_task(context.application.radio_manager.start(update.effective_chat.id, "random"))
+    query = " ".join(context.args)
+    await _do_radio(update.effective_chat.id, query, context, update)
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.application.radio_manager.stop(update.effective_chat.id)
     await update.message.reply_text("🛑 Стоп.")
 
-async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.application.radio_manager.skip(update.effective_chat.id)
-
-async def player_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = context.application.settings.BASE_URL
-    await update.message.reply_text("👇 Плеер:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Open", url=url)]]))
-
-async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: return
-    text = update.message.text
-    chat_id = update.effective_chat.id
-    
-    is_private = update.effective_chat.type == ChatType.PRIVATE
-    is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-    is_mention = any(w in text.lower() for w in ["аврора", "aurora", "бот", "dj"])
-    
-    if is_private or is_reply or is_mention:
-        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-        user = update.effective_user.first_name
-        
-        response = await ChatManager.get_response(chat_id, text, user)
-        logger.info(f"AI Response to {chat_id}: {response}")
-        
-        try:
-            if "{" in response and "command" in response:
-                data = json.loads(response[response.find("{"):response.rfind("}")+1])
-                if data.get("command") == "radio":
-                    q = data.get("query", "random")
-                    await update.message.reply_text(f"🎧 Окей! Ставлю: *{q}*", parse_mode=ParseMode.MARKDOWN)
-                    asyncio.create_task(context.application.radio_manager.start(chat_id, q))
-                    return
-        except: pass
-
-        # Если ответ пустой (ИИ сбойнул), шлем точку
-        if not response or not response.strip():
-            response = "."
-
-        if "{" not in response:
-            await update.message.reply_text(response)
-
-async def _send_track(context, chat_id, video_id):
-    dl = context.application.downloader
-    res = await dl.download(video_id)
-    if res.success and res.file_path:
-        with open(res.file_path, 'rb') as f:
-            await context.bot.send_audio(chat_id, f, title=res.track_info.title, performer=res.track_info.artist)
-
 def setup_handlers(app, radio, settings, downloader):
     app.downloader = downloader
     app.radio_manager = radio
     app.settings = settings
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play_command))
     app.add_handler(CommandHandler("radio", radio_command))
     app.add_handler(CommandHandler("stop", stop_command))
-    app.add_handler(CommandHandler("skip", skip_command))
-    app.add_handler(CommandHandler("player", player_command))
     app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("mode", admin_command))
     app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
+    
+    # ГЛАВНЫЙ ОБРАБОТЧИК ТЕКСТА
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    
     app.add_handler(CallbackQueryHandler(button_callback))

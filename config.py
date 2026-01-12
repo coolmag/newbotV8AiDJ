@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     ADMIN_IDS: str = ""
     COOKIES_CONTENT: str = ""
     PROXY_URL: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
     
     # --- Явное объявление полей ---
     ADMIN_ID_LIST: List[int] = []
