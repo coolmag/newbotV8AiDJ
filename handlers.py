@@ -60,9 +60,25 @@ async def _do_radio(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE
 
 async def _do_chat_reply(chat_id: int, text: str, user_name: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
     """Безопасная отправка ответа"""
+    # #region agent log
+    try:
+        import json
+        with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"handlers.py:61","message":"_do_chat_reply ENTRY","data":{"chat_id":chat_id,"text_preview":text[:50],"user_name":user_name},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
+    
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     
     response = await ChatManager.get_response(chat_id, text, user_name)
+    
+    # #region agent log
+    try:
+        import json
+        with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"E","location":"handlers.py:65","message":"_do_chat_reply got response","data":{"has_response":bool(response),"response_preview":response[:50] if response else None},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
     
     # ЗАЩИТА ОТ CRASH: Если ответ пустой, ставим заглушку
     if not response or not response.strip():
@@ -97,6 +113,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 1. Прямой диалог (Приват, Реплай, Меншн) -> Сразу в чат
     if is_private or is_reply or is_mention:
+        # #region agent log
+        try:
+            import json
+            with open(r"c:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main\.cursor\debug.log", "a", encoding="utf-8") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"handlers.py:99","message":"text_handler: direct chat condition met","data":{"is_private":is_private,"is_reply":is_reply,"is_mention":is_mention},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
         await _do_chat_reply(chat_id, message_text, update.effective_user.first_name, context, update)
         return
 
