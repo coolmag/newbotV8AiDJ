@@ -2,13 +2,13 @@ import pytest
 from unittest.mock import Mock, patch
 
 from nlp import analyze_message, _heuristic_fallback
-from gemini_init import genai, HAS_GENAI, GEMINI_KEY # Импорт глобальных флагов и модуля genai для мокирования
+from gemini_init import genai, HAS_GENAI # Импорт глобальных флагов и модуля genai для мокирования
 
 # Пропускаем тесты, если SDK не установлен
 pytestmark = pytest.mark.skipif(not HAS_GENAI, reason="google-generativeai SDK not imported or configured")
 
-def test_analyze_message_search_intent_gemini():
-    """Тестирует успешный happy-path с интентом 'search' через Gemini."""
+def test_analyze_message_search_intent():
+    """Тестирует успешный happy-path с интентом 'search'."""
     mock_response = Mock()
     mock_response.text = '{"intent": "search", "query": "Linkin Park Numb"}'
     
@@ -22,14 +22,14 @@ def test_analyze_message_search_intent_gemini():
             
             intent, query = analyze_message(message="play numb")
             
-            mock_model_class.assert_called_once_with("gemini-pro")
+            mock_model_class.assert_called_once_with("gemini-1.5-flash") # Model name as per nlp.py
             mock_model_instance.generate_content.assert_called_once()
             
             assert intent == "search"
             assert query == "Linkin Park Numb"
 
-def test_analyze_message_chat_intent_gemini():
-    """Тестирует успешный happy-path с интентом 'chat' через Gemini."""
+def test_analyze_message_chat_intent():
+    """Тестирует успешный happy-path с интентом 'chat'."""
     mock_response = Mock()
     mock_response.text = '{"intent": "chat", "query": ""}'
     
@@ -43,13 +43,13 @@ def test_analyze_message_chat_intent_gemini():
             
             intent, query = analyze_message(message="how are you?")
             
-            mock_model_class.assert_called_once_with("gemini-pro")
+            mock_model_class.assert_called_once_with("gemini-1.5-flash") # Model name as per nlp.py
             mock_model_instance.generate_content.assert_called_once()
             
             assert intent == "chat"
             assert query == ""
 
-def test_analyze_message_fallback_on_api_error_gemini():
+def test_analyze_message_fallback_on_api_error():
     """Тестирует fallback к эвристике при ошибке Gemini API."""
     with patch('google.generativeai.GenerativeModel', side_effect=Exception("API is down")):
         with patch('gemini_init.HAS_GENAI', True), \
@@ -58,7 +58,7 @@ def test_analyze_message_fallback_on_api_error_gemini():
             
             # Эвристика должна сработать и вернуть "chat" для короткого сообщения без ключевых слов
             intent, query = analyze_message(message="ошибка")
-            assert intent == "chat" 
+            assert intent == "chat" # Default fallback is chat now
             assert query == ""
 
 def test_heuristic_fallback_short_chat_message():

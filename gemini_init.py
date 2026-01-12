@@ -1,40 +1,29 @@
-# gemini_init.py
 import os
 import logging
 
+# Настраиваем логгер
 logger = logging.getLogger("gemini")
 
 HAS_GENAI = False
-genai = None
+client = None # Теперь это объект клиента, а не модуль
 
-# Пытаемся импортировать библиотеку
 try:
-    import google.generativeai as genai
+    # НОВЫЙ ИМПОРТ (Google GenAI SDK v1.0+)
+    from google import genai
     
     api_key = os.getenv("GEMINI_API_KEY")
     if api_key:
-        genai.configure(api_key=api_key)
+        # Инициализация клиента
+        client = genai.Client(api_key=api_key)
         HAS_GENAI = True
-        logger.info("✅ Gemini API успешно подключен.")
-        
-        # --- DEBUG: Вывод доступных моделей в лог ---
-        try:
-            logger.info("🔍 Доступные модели:")
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    logger.info(f"   - {m.name}")
-        except Exception as e:
-            logger.warning(f"Не удалось получить список моделей: {e}")
-        # --------------------------------------------
-            
+        logger.info("✅ Google GenAI SDK (New) успешно подключен.")
     else:
-        logger.warning("⚠️ Нет ключа API.")
+        logger.warning("⚠️ GEMINI_API_KEY не найден.")
         HAS_GENAI = False
 
 except ImportError:
-    logger.error("❌ Библиотека 'google-generativeai' не найдена.")
+    logger.error("❌ Библиотека 'google-genai' не установлена. Проверьте requirements.txt")
     HAS_GENAI = False
 except Exception as e:
-    logger.error(f"❌ Ошибка инициализации Gemini: {e}")
+    logger.error(f"❌ Ошибка инициализации клиента GenAI: {e}")
     HAS_GENAI = False
-

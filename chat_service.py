@@ -7,7 +7,8 @@ import httpx
 import asyncio
 
 from ai_config import get_active_providers, AIProviderConfig
-from gemini_init import genai, HAS_GENAI  # <--- ИМПОРТ Native Client
+# Импортируем новый клиент
+from gemini_init import client, HAS_GENAI
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ chat_modes = defaultdict(lambda: "default")
 
 PERSONAS = {
     "default": "Ты DJ Aurora. Веселая, дерзкая. Отвечай кратко.",
-    "toxic": "Ты DJ Aurora (Toxic). Саркастичная, язвительная. Хами.",
+    "toxic": "Ты DJ Aurora (Toxic). Хами.",
     "gop": "Ты Аврора с района. Дерзкая.",
     "chill": "Ты Аврора (Chill). Спокойная.",
     "quiz": "Ты Ведущая Викторины."
@@ -48,15 +49,24 @@ class ChatManager:
 
     @staticmethod
     async def _call_native_gemini(messages: list) -> str:
-        if not HAS_GENAI or not genai: return None
+        """Резерв через Google GenAI SDK (New)"""
+        if not HAS_GENAI or not client: return None
         try:
-            prompt = messages[0]["content"] + "\n\n" + f"User: {messages[-1]['content']}\nAssistant:"
-            # ИСПРАВЛЕНИЕ: Только 'gemini-pro' работает стабильно здесь
-            model = genai.GenerativeModel("gemini-pro")
-            resp = await model.generate_content_async(prompt)
-            return resp.text
+            # Формируем простой промпт
+            history_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+            
+            # В v1.57.0 вызов синхронный по умолчанию. Для асинхронности в FastAPI лучше вынести в executor.
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.models.generate_content(
+                    model='gemini-1.5-flash',
+                    contents=history_text
+                )
+            )
+            return response.text
         except Exception as e:
-            logger.error(f"[AI Native] Gemini failed: {e}")
+            logger.error(f"[Native Gemini] Error: {e}")
             return None
 
     @staticmethod
@@ -67,27 +77,18 @@ class ChatManager:
         for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
-        providers = get_active_providers()
-        response_text = None
-
-        # 1. Пробуем внешних провайдеров (Groq, OpenRouter)
-        async with httpx.AsyncClient() as client:
-            for provider in providers:
-                response_text = await ChatManager._call_provider(client, provider, messages)
-                if response_text: break
+        # 1. External Providers (Groq, OpenRouter)
+        async with httpx.AsyncClient() as http_client:
+            for provider in get_active_providers():
+                if res := await ChatManager._call_provider(http_client, provider, messages):
+                    history.append({"role": "user", "content": user_text})
+                    history.append({"role": "assistant", "content": res})
+                    return res
         
-        # 2. Если все упали — пробуем Native Gemini (Ваш ключ)
-        if not response_text:
-            logger.info("⚠️ External providers failed. Trying Native Gemini...")
-            response_text = await ChatManager._call_native_gemini(messages)
+        # 2. Native Gemini (Backup) - теперь через новый SDK
+        if res := await ChatManager._call_native_gemini(messages):
+            history.append({"role": "user", "content": user_text})
+            history.append({"role": "assistant", "content": res})
+            return res
 
-        # 3. Полный провал
-        if not response_text:
-            return random.choice(BACKUP_PHRASES)
-
-        # Очистка и сохранение
-        response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
-        history.append({"role": "user", "content": user_text})
-        history.append({"role": "assistant", "content": response_text})
-        
-        return response_text
+        return random.choice(BACKUP_PHRASES)
