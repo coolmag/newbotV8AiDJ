@@ -50,7 +50,8 @@ except Exception as e:
         import json
         with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"gemini_init.py:15","message":"Gemini init: exception","data":{"error":str(e)[:100]},"timestamp":int(__import__("time").time()*1000)})+"\n")
-except: pass
+    except: 
+        pass
     # #endregion
     pass
 
