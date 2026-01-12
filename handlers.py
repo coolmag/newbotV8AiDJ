@@ -111,12 +111,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(response) # Отправляем как есть, если не распарсили
             return
 
-    # 2. COMMAND MODE (Поиск через NLP)
+    # 2. Если это не болтовня, используем NLP для поиска музыки
+    from gemini_init import HAS_GENAI # Импортируем флаг из нового модуля
+    if not HAS_GENAI:
+        return # NLP движок неактивен, игнорируем сообщение (логируется в nlp.py)
+
     logger.info(f"🧠 Analyze intent for: {message_text}")
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     
+    # Запускаем синхронную NLP функцию в отдельном потоке
     loop = asyncio.get_event_loop()
     intent, query = await loop.run_in_executor(None, analyze_message, message_text)
+    
+    logger.info(f"NLP handled message. Intent: '{intent}', Query: '{query}'")
     
     if intent == 'search':
         await _do_play(chat_id, query, context, update)
@@ -138,7 +145,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report.append(f"🧠 *AI DJ Cascade:* ✅ {provider_names}")
     
     # Проверка NLP движка
-    from main import HAS_GENAI, GEMINI_KEY
+    from gemini_init import HAS_GENAI, GEMINI_KEY
     if HAS_GENAI and GEMINI_KEY:
         report.append("✨ *NLP Engine (Gemini):* ✅ SDK Found, Key Present")
     elif HAS_GENAI:
