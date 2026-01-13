@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
     app.state.downloader = downloader
     
     # Build Telegram App
-    builder = Application.builder().token(settings.BOT_TOKEN)
+    builder = Application.builder().token(settings.BOT_TOKEN).read_timeout(30).write_timeout(30)
     if settings.PROXY_URL: builder.proxy_url(settings.PROXY_URL)
     tg_app = builder.build()
     tg_app.bot_data['settings'] = settings
