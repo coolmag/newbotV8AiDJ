@@ -105,10 +105,6 @@ def analyze_message(message: str) -> Tuple[str, Optional[str]]:
         if re.search(p, msg_lower):
             return "search", message
     
-    # Длинное сообщение -> поиск
-    if len(message) > 40:
-        return "search", message
-    
     # === AI АНАЛИЗ ===
     if not HAS_GENAI: 
         return "chat", ""

@@ -47,6 +47,8 @@ class YouTubeDownloader:
             "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             'nocheckcertificate': True, 'socket_timeout': 15, 'retries': 3,
+            'ignoreerrors': True, 'fragment_retries': 10,
+            'source_address': '0.0.0.0', # Force IPv4 on some systems
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
         logger.info("YouTubeDownloader initialized")
