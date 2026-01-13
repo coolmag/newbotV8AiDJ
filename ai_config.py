@@ -132,45 +132,91 @@ ANTHROPIC_CONFIG = AIProviderConfig("Anthropic", os.getenv("ANTHROPIC_API_KEY", 
 OPENROUTER_MISTRAL_FREE = AIProviderConfig("OpenRouterMistral", os.getenv("OPENROUTER_API_KEY", ""), "https://openrouter.ai/api/v1/chat/completions", "mistralai/mistral-7b-instruct:free", bool(os.getenv("OPENROUTER_API_KEY")))
 OPENROUTER_LLAMA_FREE = AIProviderConfig("OpenRouterLlama", os.getenv("OPENROUTER_API_KEY", ""), "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.2-3b-instruct:free", bool(os.getenv("OPENROUTER_API_KEY")))
 
+# === NEW FREE PROVIDERS ===
+VENUSAI_CONFIG = AIProviderConfig(
+    name="VenusAI",
+    api_key=os.getenv("VENUSAI_API_KEY", ""),
+    base_url="https://api.venusai.com/v1",
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    is_active=bool(os.getenv("VENUSAI_API_KEY"))
+)
+
+INTELLAPI_CONFIG = AIProviderConfig(
+    name="IntelliAPI",
+    api_key=os.getenv("INTELLAPI_API_KEY", ""),
+    base_url="https://api.intellapi.com/v1",
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    is_active=bool(os.getenv("INTELLAPI_API_KEY"))
+)
+
 def get_active_providers() -> List[AIProviderConfig]:
     import logging
     logger = logging.getLogger(__name__)
     
     providers = []
+    seen = set()  # Для удаления дубликатов
     
     # === ПРИОРИТЕТ 1: GIGACHAT (Сбер) ===
-    if GIGACHAT_CONFIG.is_active: 
+    if GIGACHAT_CONFIG.is_active and "GigaChat" not in seen:
         providers.append(GIGACHAT_CONFIG)
+        seen.add("GigaChat")
         logger.info(f"[AI Config] GigaChat is ACTIVE")
     else:
         logger.warning(f"[AI Config] GigaChat is INACTIVE")
     
     # === ПРИОРИТЕТ 2: Groq (если есть ключ) ===
-    if GROQ_CONFIG.is_active:
+    if GROQ_CONFIG.is_active and "Groq" not in seen:
         providers.append(GROQ_CONFIG)
+        seen.add("Groq")
         logger.info(f"[AI Config] Groq is ACTIVE")
     
     # === ПРИОРИТЕТ 3: OpenRouter бесплатные ===
-    if OPENROUTER_MISTRAL_FREE.is_active:
+    if OPENROUTER_MISTRAL_FREE.is_active and "OpenRouterMistral" not in seen:
         providers.append(OPENROUTER_MISTRAL_FREE)
+        seen.add("OpenRouterMistral")
         logger.info(f"[AI Config] OpenRouter Mistral Free is ACTIVE")
-    if OPENROUTER_LLAMA_FREE.is_active:
+    if OPENROUTER_LLAMA_FREE.is_active and "OpenRouterLlama" not in seen:
         providers.append(OPENROUTER_LLAMA_FREE)
+        seen.add("OpenRouterLlama")
         logger.info(f"[AI Config] OpenRouter Llama Free is ACTIVE")
     
     # === ПРИОРИТЕТ 4: HuggingFace ===
-    if HF_CONFIG.is_active:
+    if HF_CONFIG.is_active and "HuggingFace" not in seen:
         providers.append(HF_CONFIG)
+        seen.add("HuggingFace")
         logger.info(f"[AI Config] HuggingFace is ACTIVE")
     
+    # === ПРИОРИТЕТ 5: VenusAI (free) ===
+    if VENUSAI_CONFIG.is_active and "VenusAI" not in seen:
+        providers.append(VENUSAI_CONFIG)
+        seen.add("VenusAI")
+        logger.info(f"[AI Config] VenusAI is ACTIVE (free)")
+    else:
+        logger.warning(f"[AI Config] VenusAI is INACTIVE")
+    
+    # === ПРИОРИТЕТ 6: IntelliAPI (free) ===
+    if INTELLAPI_CONFIG.is_active and "IntelliAPI" not in seen:
+        providers.append(INTELLAPI_CONFIG)
+        seen.add("IntelliAPI")
+        logger.info(f"[AI Config] IntelliAPI is ACTIVE (free)")
+    else:
+        logger.warning(f"[AI Config] IntelliAPI is INACTIVE")
+    
     # === РЕЗЕРВЫ ===
-    if TOGETHER_CONFIG.is_active: providers.append(TOGETHER_CONFIG)
-    if PERPLEXITY_CONFIG.is_active: providers.append(PERPLEXITY_CONFIG)
-    if COHERE_CONFIG.is_active: providers.append(COHERE_CONFIG)
-    if ANTHROPIC_CONFIG.is_active: providers.append(ANTHROPIC_CONFIG)
-    if OPENROUTER_CONFIG.is_active: providers.append(OPENROUTER_CONFIG)
-    if NOVITA_CONFIG.is_active: providers.append(NOVITA_CONFIG)
-    if DEEPSEEK_CONFIG.is_active: providers.append(DEEPSEEK_CONFIG)
+    if TOGETHER_CONFIG.is_active and "Together" not in seen:
+        providers.append(TOGETHER_CONFIG); seen.add("Together")
+    if PERPLEXITY_CONFIG.is_active and "Perplexity" not in seen:
+        providers.append(PERPLEXITY_CONFIG); seen.add("Perplexity")
+    if COHERE_CONFIG.is_active and "Cohere" not in seen:
+        providers.append(COHERE_CONFIG); seen.add("Cohere")
+    if ANTHROPIC_CONFIG.is_active and "Anthropic" not in seen:
+        providers.append(ANTHROPIC_CONFIG); seen.add("Anthropic")
+    if OPENROUTER_CONFIG.is_active and "OpenRouter" not in seen:
+        providers.append(OPENROUTER_CONFIG); seen.add("OpenRouter")
+    if NOVITA_CONFIG.is_active and "Novita" not in seen:
+        providers.append(NOVITA_CONFIG); seen.add("Novita")
+    if DEEPSEEK_CONFIG.is_active and "DeepSeek" not in seen:
+        providers.append(DEEPSEEK_CONFIG); seen.add("DeepSeek")
     
     logger.info(f"[AI Config] Total active providers: {len(providers)}")
     if providers:
@@ -192,3 +238,15 @@ def get_gemini_client_for_key(key_index: int = 0):
             logger.error(f"[Gemini] Failed to create client for key {key_index}: {e}")
             return None
     return None
+git config user.email "tyca77@gmail.com"
+git config user.name "Coolmag"
+cd "C:\Users\tyca7\Desktop\newbotV8AiD\newbotV8AiDJ-main"
+git status
+git add ai_config.py
+git status
+git commit -m "Add free AI providers: VenusAI, IntelliAPI"
+git push
+git log --oneline -3
+git add ai_config.py
+git commit -m "Fix ai_config.py - clean file"
+git push
