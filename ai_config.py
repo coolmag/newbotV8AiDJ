@@ -29,12 +29,14 @@ def _parse_gemini_keys() -> List[str]:
 # === АКТУАЛЬНЫЕ БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа) ===
 
 # HuggingFace Inference API — БЕСПЛАТНО, 1000+ моделей
+# ВНИМАНИЕ: Старый inference API (api-inference.huggingface.co) отключен (ошибка 410).
+# Новый router.huggingface.co требует другой интеграции. Временно деактивирован.
 HF_CONFIG = AIProviderConfig(
     "HuggingFace",
-    os.getenv("HF_TOKEN", ""),  # Токен опционально, но лучше иметь
-    "https://api-inference.huggingface.co/models/",
-    "microsoft/Phi-3-mini-4k-instruct",  # Быстрая модель
-    bool(os.getenv("HF_TOKEN", ""))  # Активен если есть токен
+    os.getenv("HF_TOKEN", ""),
+    "https://router.huggingface.co/", # Новый базовый URL
+    "microsoft/Phi-3-mini-4k-instruct",
+    False # Временно деактивирован
 )
 
 # === ПРОВАЙДЕРЫ С БЕСПЛАТНЫМ TIER (нужен ключ, но есть free credits) ===
@@ -62,7 +64,7 @@ DEEPSEEK_CONFIG = AIProviderConfig(
 OPENROUTER_CONFIG = AIProviderConfig(
     "OpenRouter",
     os.getenv("OPENROUTER_API_KEY", ""),
-    "https://openrouter.ai/api/v1",
+    "https://openrouter.ai/api/v1/chat/completions", # ИСПРАВЛЕНО: добавлен /chat/completions
     "anthropic/claude-3-haiku",  # Бесплатная модель
     bool(os.getenv("OPENROUTER_API_KEY"))
 )
