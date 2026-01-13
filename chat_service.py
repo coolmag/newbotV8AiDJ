@@ -5,10 +5,12 @@ import httpx
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 from collections import deque, defaultdict
 
 from ai_config import get_active_providers, AIProviderConfig, KODACODE_CONFIG
+from ai_personas import get_system_prompt
 from gemini_init import generate_smart, HAS_GENAI
 
 def _get_debug_log_path():
@@ -21,14 +23,6 @@ logger = logging.getLogger(__name__)
 
 chat_histories = defaultdict(lambda: deque(maxlen=6))
 chat_modes = defaultdict(lambda: "default")
-
-PERSONAS = {
-    "default": "Ты DJ Aurora. Веселая, используй эмодзи.",
-    "toxic": "Ты DJ Aurora (Toxic). Хами.",
-    "gop": "Ты Аврора с района.",
-    "chill": "Ты Аврора (Chill).",
-    "quiz": "Ты Ведущая Викторины."
-}
 
 class ChatManager:
     @staticmethod
@@ -203,6 +197,45 @@ class ChatManager:
         return None
 
     @staticmethod
+    async def _call_huggingface(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        """HuggingFace Inference API - использует параметр 'inputs'"""
+        try:
+            # Формируем текст из сообщений
+            prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+            
+            headers = {"Authorization": f"Bearer {provider.api_key}"}
+            payload = {"inputs": prompt, "parameters": {"max_new_tokens": 150, "return_full_text": False}}
+            
+            logger.info(f"[HuggingFace] Calling {provider.base_url}")
+            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=15.0)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info(f"[HuggingFace] Response type: {type(data)}, keys: {data.keys() if isinstance(data, dict) else 'list'}")
+                
+                # HF возвращает объект с generated_text или список
+                if isinstance(data, dict) and "generated_text" in data:
+                    result = data["generated_text"]
+                    logger.info(f"[HuggingFace] Got result from dict, length: {len(result)}")
+                    return result
+                elif isinstance(data, list) and len(data) > 0:
+                    # Может быть список с объектом
+                    item = data[0]
+                    if isinstance(item, dict) and "generated_text" in item:
+                        result = item["generated_text"]
+                        logger.info(f"[HuggingFace] Got result from list[0], length: {len(result)}")
+                        return result
+                    elif isinstance(item, str):
+                        # Иногда возвращает просто текст
+                        logger.info(f"[HuggingFace] Got result from list[0] str, length: {len(item)}")
+                        return item
+            else:
+                logger.warning(f"[HuggingFace] Status {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            logger.warning(f"[HuggingFace] Error: {e}")
+        return None
+
+    @staticmethod
     async def _call_generic(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
         # #region agent log
         try:
@@ -265,7 +298,7 @@ class ChatManager:
         
         mode = chat_modes[chat_id]
         history = chat_histories[chat_id]
-        messages = [{"role": "system", "content": PERSONAS.get(mode, "")}]
+        messages = [{"role": "system", "content": get_system_prompt(mode)}]
         for msg in history: messages.append(msg)
         messages.append({"role": "user", "content": f"{user_name}: {user_text}"})
 
@@ -294,6 +327,8 @@ class ChatManager:
                 try:
                     if provider.name == "GigaChat":
                         res = await ChatManager._call_gigachat(http_client, provider, messages)
+                    elif provider.name == "HuggingFace":
+                        res = await ChatManager._call_huggingface(http_client, provider, messages)
                     elif provider.name == "Anthropic":
                         res = await ChatManager._call_anthropic(http_client, provider, messages)
                     elif provider.name == "Cohere":

@@ -27,10 +27,49 @@ def _parse_gemini_keys() -> List[str]:
     return [k.strip() for k in keys_env.split(",") if k.strip()]
 
 # === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ ===
-PUTER_CONFIG = AIProviderConfig("Puter", "", "https://api.puter.com/v1/chat/completions", "gpt-4o", True)
-HF_CONFIG = AIProviderConfig("HuggingFace", os.getenv("HF_TOKEN", ""), "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct", "meta-llama/Meta-Llama-3-8B-Instruct", True)
-OPENROUTER_MISTRAL_FREE = AIProviderConfig("OpenRouterMistral", os.getenv("OPENROUTER_API_KEY", ""), "https://openrouter.ai/api/v1/chat/completions", "mistralai/mistral-7b-instruct:free", True)
-OPENROUTER_LLAMA_FREE = AIProviderConfig("OpenRouterLlama", os.getenv("OPENROUTER_API_KEY", ""), "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.2-3b-instruct:free", True)
+# Puter требует API ключ - активируем только если есть ключ в окружении
+PUTER_CONFIG = AIProviderConfig(
+    "Puter", 
+    os.getenv("PUTER_API_KEY", ""), 
+    "https://api.puter.com/v1/chat/completions", 
+    "gpt-4o", 
+    bool(os.getenv("PUTER_API_KEY"))
+)
+
+# HuggingFace - используем Inference API (формат для chat-комплитов)
+HF_CONFIG = AIProviderConfig(
+    "HuggingFace", 
+    os.getenv("HF_TOKEN", ""), 
+    "https://api-inference.huggingface.co/models/meta-llama/Llama-3-8B-Instruct",
+    "meta-llama/Llama-3-8B-Instruct", 
+    bool(os.getenv("HF_TOKEN"))
+)
+
+# OpenRouter - бесплатные модели (могут быть перегружены)
+OPENROUTER_MISTRAL_FREE = AIProviderConfig(
+    "OpenRouterMistral", 
+    os.getenv("OPENROUTER_API_KEY", ""), 
+    "https://openrouter.ai/api/v1/chat/completions", 
+    "mistralai/mistral-7b-instruct:free", 
+    bool(os.getenv("OPENROUTER_API_KEY"))
+)
+
+# Используем более стабильную бесплатную модель
+OPENROUTER_QWEN_FREE = AIProviderConfig(
+    "OpenRouterQwen", 
+    os.getenv("OPENROUTER_API_KEY", ""), 
+    "https://openrouter.ai/api/v1/chat/completions", 
+    "qwen/qwen-2.5-7b-instruct:free", 
+    bool(os.getenv("OPENROUTER_API_KEY"))
+)
+
+OPENROUTER_LLAMA_FREE = AIProviderConfig(
+    "OpenRouterLlama", 
+    os.getenv("OPENROUTER_API_KEY", ""), 
+    "https://openrouter.ai/api/v1/chat/completions", 
+    "meta-llama/llama-3.2-3b-instruct:free", 
+    bool(os.getenv("OPENROUTER_API_KEY"))
+)
 
 # === ПРОВАЙДЕРЫ С КЛЮЧАМИ ===
 GIGACHAT_CONFIG = AIProviderConfig("GigaChat", os.getenv("GIGACHAT_CREDENTIALS", ""), "https://gigachat.devices.sberbank.ru/api/v1", "GigaChat", bool(os.getenv("GIGACHAT_CREDENTIALS")))
@@ -48,7 +87,7 @@ GEMINI_CONFIGS = []  # Gemini используется через gemini_init.py
 
 def get_active_providers() -> List[AIProviderConfig]:
     providers, seen = [], set()
-    for cfg in [PUTER_CONFIG, HF_CONFIG, OPENROUTER_MISTRAL_FREE, OPENROUTER_LLAMA_FREE, GIGACHAT_CONFIG, GROQ_CONFIG, DEEPSEEK_CONFIG, NOVITA_CONFIG, TOGETHER_CONFIG, PERPLEXITY_CONFIG, COHERE_CONFIG, ANTHROPIC_CONFIG, KODACODE_CONFIG]:
+    for cfg in [PUTER_CONFIG, HF_CONFIG, OPENROUTER_MISTRAL_FREE, OPENROUTER_QWEN_FREE, OPENROUTER_LLAMA_FREE, GIGACHAT_CONFIG, GROQ_CONFIG, DEEPSEEK_CONFIG, NOVITA_CONFIG, TOGETHER_CONFIG, PERPLEXITY_CONFIG, COHERE_CONFIG, ANTHROPIC_CONFIG, KODACODE_CONFIG]:
         if cfg.name not in seen and cfg.is_active:
             providers.append(cfg); seen.add(cfg.name)
             logger.info(f"[AI Config] {cfg.name} is ACTIVE")
