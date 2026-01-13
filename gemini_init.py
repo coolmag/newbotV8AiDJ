@@ -117,20 +117,29 @@ def generate_smart(prompt: str) -> str:
                 MODELS_TO_TRY.append(model_name)
                 logger.info(f"[Gemini] Found model: {model_name} (flash={is_flash}, gemini2={is_gemini_2})")
         
-        # Sort: gemini-2.5-flash first, then gemini-2.0-flash, then others
+        # Priority: gemini-1.5-flash (1500/day) > gemini-2.0-flash > gemini-1.0-flash
+        # SKIP: gemini-2.5-flash (only 20/day free tier - too restrictive!)
         def sort_key(name):
+            # Skip 2.5-flash models entirely - they have very low free tier limits
             if '2.5-flash' in name:
+                return (999, name)  # Push to the end (will be skipped)
+            # Priority 1: 1.5-flash models (best free tier: 1500/day)
+            elif '1.5-flash' in name:
                 return (0, name)
+            # Priority 2: 2.0-flash models
             elif '2.0-flash' in name:
                 return (1, name)
+            # Priority 3: Other flash models
             elif 'flash' in name:
                 return (2, name)
-            elif '2.' in name:
-                return (3, name)
             else:
-                return (4, name)
+                return (3, name)
         
-        MODELS_TO_TRY = sorted(MODELS_TO_TRY, key=sort_key)[:5]  # Take top 5 free models
+        # Filter out 2.5-flash models and sort
+        MODELS_TO_TRY = sorted(MODELS_TO_TRY, key=sort_key)[:5]
+        
+        # Remove any 2.5-flash models that slipped through
+        MODELS_TO_TRY = [m for m in MODELS_TO_TRY if '2.5-flash' not in m]
         
         if not MODELS_TO_TRY:
             logger.error("[Gemini] No suitable models found!")
