@@ -358,6 +358,62 @@ class ChatManager:
         return None
 
     @staticmethod
+    async def _call_openrouter(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        """OpenRouter API - OpenAI compatible с разными провайдерами"""
+        try:
+            logger.info(f"[OpenRouter] Calling {provider.base_url} with model {provider.model}")
+            
+            headers = {
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://telegram-bot",
+                "X-Title": "DJ-Aurora-Bot"
+            }
+            
+            payload = {
+                "model": provider.model,
+                "messages": messages,
+                "max_tokens": 150,
+                "temperature": 0.7
+            }
+            
+            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=15.0)
+            
+            logger.info(f"[OpenRouter] Response status: {resp.status_code}")
+            
+            if resp.status_code == 200:
+                # OpenRouter может вернуть HTML при ошибке
+                content_type = resp.headers.get("content-type", "")
+                if "application/json" not in content_type:
+                    logger.warning(f"[OpenRouter] Unexpected content-type: {content_type}")
+                    logger.debug(f"[OpenRouter] Response: {resp.text[:500]}")
+                    return None
+                
+                try:
+                    data = resp.json()
+                except Exception as e:
+                    logger.error(f"[OpenRouter] JSON parse error: {e}")
+                    logger.debug(f"[OpenRouter] Raw response: {resp.text[:500]}")
+                    return None
+                
+                logger.info(f"[OpenRouter] Response keys: {list(data.keys())}")
+                
+                # OpenRouter format: {"choices": [{"message": {"content": "..."}}]}
+                if "choices" in data and len(data["choices"]) > 0:
+                    result = data["choices"][0]["message"]["content"]
+                    if result:
+                        logger.info(f"[OpenRouter] Success, result length: {len(result)}")
+                        return result
+                
+                logger.warning(f"[OpenRouter] No valid content in response")
+            else:
+                logger.warning(f"[OpenRouter] Status {resp.status_code}: {resp.text[:200]}")
+                
+        except Exception as e:
+            logger.error(f"[OpenRouter] Error: {e}")
+        return None
+
+    @staticmethod
     async def _call_generic(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
         # #region agent log
         try:
@@ -465,6 +521,8 @@ class ChatManager:
                         res = await ChatManager._call_cohere(http_client, provider, messages)
                     elif provider.name == "HuggingFace":
                         res = await ChatManager._call_huggingface(http_client, provider, messages)
+                    elif provider.name == "OpenRouter":
+                        res = await ChatManager._call_openrouter(http_client, provider, messages)
                     elif "KodaCode" in provider.name:
                         res = await ChatManager._call_kodacode(http_client, provider, messages)
                     else:

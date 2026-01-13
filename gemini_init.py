@@ -85,7 +85,7 @@ def generate_smart(prompt: str) -> str:
             logger.info(f"[Gemini] First 5 models: {[m.name for m in available_models[:5]]}")
         
         # Filter for FREE models only (Flash tier)
-        # Priority: gemini-2.5-flash > gemini-2.0-flash > others
+        # Priority: gemini-1.5-flash > gemini-2.0-flash > gemini-2.5-flash (у 2.5 маленький free tier!)
         free_model_patterns = ['flash', '1.5-flash', '1.5-pro']
         
         for model in available_models:
@@ -207,7 +207,9 @@ def generate_smart(prompt: str) -> str:
                     return None
                     
             except errors.ClientError as e:
-                if e.status_code == 429:
+                error_str = str(e)
+                # Проверяем разные форматы 429 ошибки
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
                     # RESOURCE_EXHAUSTED - rate limit, wait and retry
                     wait_time = (2 ** retry_count) * 30  # 30s, 60s, 120s
                     logger.warning(f"[Gemini] Rate limit (429) for model {m}, waiting {wait_time}s...")
