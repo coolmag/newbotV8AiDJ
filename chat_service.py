@@ -8,6 +8,7 @@ import os
 import re
 from pathlib import Path
 from collections import deque, defaultdict
+from typing import Optional, Dict, List
 
 from ai_config import get_active_providers, AIProviderConfig, KODACODE_CONFIG
 from ai_personas import get_system_prompt
