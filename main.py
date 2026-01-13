@@ -129,8 +129,14 @@ async def get_playlist(query: str, request: Request):
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
     tg_app = request.app.state.tg_app
-    try: await tg_app.process_update(Update.de_json(await request.json(), tg_app.bot))
-    except Exception as e: logger.error(f"Webhook Update Error: {e}")
+    try:
+        data = await request.json()
+        update = Update.de_json(data, tg_app.bot)
+        await tg_app.process_update(update)
+    except json.JSONDecodeError:
+        logger.warning("Webhook received empty or invalid JSON. Likely a webhook validation ping.")
+    except Exception as e:
+        logger.error(f"Webhook Update Error: {e!r}", exc_info=True)
     return {"ok": True}
 
 app.mount("/", StaticFiles(directory="webapp", html=True), name="static")
