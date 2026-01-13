@@ -9,23 +9,22 @@ logger = logging.getLogger(__name__)
 
 # === РАДИО ПАТТЕРНЫ ===
 RADIO_MOODS = {
-    # Грусть / Сон
-    "sad": ["груст", "печаль", "тоска", "скука", "спать", "снова", "тишина", "уснуть", "ночь", "вечер", "расслаб", "chill", "lofi", "меланхол"],
-    "sleep": ["спать", "снова", "уснуть", "ночн", "колыбель", "lullaby"],
+    # Медленное / Сон
+    "slow": ["медлен", "slow", "релакс", "расслаб", "chill", "lofi", "ambient", "instrumental", "без слов", "пианино"],
+    "sleep": ["спать", "уснуть", "сноч", "ночн", "колыбель", "lullaby", "тишина"],
+    # Грусть
+    "sad": ["груст", "печаль", "тоска", "скука", "вечер", "меланхол"],
     # Веселье / Энергия
-    "party": ["весель", "тусовк", "танцевал", "party", "club", "clubbing", "energi", "хайп", "dancing"],
+    "party": ["весель", "тусовк", "танцевал", "party", "club", "energi", "хайп", "dancing", "энергич"],
     "happy": ["радост", "счаст", "весел", "позитив"],
     # Рок / Метал
-    "rock": ["рок", "метал", "hard", "metal", "rock", "ария", "кипелов", "король и шут"],
+    "rock": ["рок", "метал", "hard", "metal", "ария", "кипелов", "король и шут"],
     # Русские хиты
     "russian": ["русск", "советск", "ссср", "наша", "отечеств", "виктор цой", "кино", "любэ", "звери", "би-2"],
-    # Инструментал
-    "instrumental": ["пианино", "гитар", "инструментал", "без слов", "ambient", "nature"],
 }
 
-# === НАШИ ТРЕКИ (из истории) ===
-# Здесь будем хранить историю запросов пользователей
-USER_FAVORITES = {}  # chat_id -> list of artist/title
+# Слова для исключения из artist detection
+EXCLUDE_ARTISTS = ["что", "такое", "это", "нашу", "наш", "радио", "музыку", "трек", "песню", "включи", "давай", "поставь"]
 
 def analyze_message(message: str) -> Tuple[str, Optional[str]]:
     msg_lower = message.lower().strip()
@@ -53,13 +52,11 @@ def analyze_message(message: str) -> Tuple[str, Optional[str]]:
     artist_match = re.search(r"(?:давай|включи|поставь)\s+([а-яёa-z]+)", msg_lower)
     if artist_match:
         artist = artist_match.group(1)
-        if artist and len(artist) > 2:
-            exclude = ["спать", "грустить", "веселиться", "нашу", "радио", "музыку", "трек", "песню"]
-            if artist not in exclude:
-                logger.info(f"[NLP] Artist detected: {artist}")
-                return "radio", f"{artist} музыка"
+        if artist and len(artist) > 2 and artist not in EXCLUDE_ARTISTS:
+            logger.info(f"[NLP] Artist detected: {artist}")
+            return "radio", f"{artist} музыка"
     
-    # 3. Настроение / режим
+    # 3. Настроение / режим (проверяем до стандартных паттернов)
     for mood, keywords in RADIO_MOODS.items():
         if any(kw in msg_lower for kw in keywords):
             logger.info(f"[NLP] Mood detected: {mood}")
