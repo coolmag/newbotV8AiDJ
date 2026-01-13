@@ -36,16 +36,16 @@ PUTER_CONFIG = AIProviderConfig(
     bool(os.getenv("PUTER_API_KEY"))
 )
 
-# HuggingFace - используем новый HF Router API
-HF_CONFIG = AIProviderConfig(
-    "HuggingFace", 
-    os.getenv("HF_TOKEN", ""), 
-    "https://router.huggingface.co/meta-llama/Llama-3-8B-Instruct/v1/chat/completions",
-    "meta-llama/Llama-3-8B-Instruct", 
-    bool(os.getenv("HF_TOKEN"))
-)
+# HuggingFace - ОТКЛЮЧЕН (старый API несовместим, требует нового формата)
+# HF_CONFIG = AIProviderConfig(
+#     "HuggingFace", 
+#     os.getenv("HF_TOKEN", ""), 
+#     "https://api-inference.huggingface.co/models/meta-llama/Llama-3-8B-Instruct",
+#     "meta-llama/Llama-3-8B-Instruct", 
+#     bool(os.getenv("HF_TOKEN"))
+# )
 
-# OpenRouter - бесплатные модели (могут быть перегружены)
+# OpenRouter - бесплатные модели (могут быть перегружены, но работают)
 OPENROUTER_MISTRAL_FREE = AIProviderConfig(
     "OpenRouterMistral", 
     os.getenv("OPENROUTER_API_KEY", ""), 
@@ -54,7 +54,7 @@ OPENROUTER_MISTRAL_FREE = AIProviderConfig(
     bool(os.getenv("OPENROUTER_API_KEY"))
 )
 
-# Используем более стабильную бесплатную модель
+# Более стабильная модель
 OPENROUTER_QWEN_FREE = AIProviderConfig(
     "OpenRouterQwen", 
     os.getenv("OPENROUTER_API_KEY", ""), 
@@ -69,6 +69,15 @@ OPENROUTER_LLAMA_FREE = AIProviderConfig(
     "https://openrouter.ai/api/v1/chat/completions", 
     "meta-llama/llama-3.2-3b-instruct:free", 
     bool(os.getenv("OPENROUTER_API_KEY"))
+)
+
+# Nexra - бесплатный провайдер
+NEXRA_CONFIG = AIProviderConfig(
+    "Nexra", 
+    "", 
+    "https://api.nexra.ai/chat/completions", 
+    "openhermes", 
+    True  # Всегда активен, бесплатен
 )
 
 # === ПРОВАЙДЕРЫ С КЛЮЧАМИ ===
@@ -87,10 +96,18 @@ GEMINI_CONFIGS = []  # Gemini используется через gemini_init.py
 
 def get_active_providers() -> List[AIProviderConfig]:
     providers, seen = [], set()
-    for cfg in [PUTER_CONFIG, HF_CONFIG, OPENROUTER_MISTRAL_FREE, OPENROUTER_QWEN_FREE, OPENROUTER_LLAMA_FREE, GIGACHAT_CONFIG, GROQ_CONFIG, DEEPSEEK_CONFIG, NOVITA_CONFIG, TOGETHER_CONFIG, PERPLEXITY_CONFIG, COHERE_CONFIG, ANTHROPIC_CONFIG, KODACODE_CONFIG]:
+    # Бесплатные провайдеры (без ключа или с ключом)
+    for cfg in [OPENROUTER_MISTRAL_FREE, OPENROUTER_QWEN_FREE, OPENROUTER_LLAMA_FREE, NEXRA_CONFIG]:
+        if cfg.name not in seen and cfg.is_active:
+            providers.append(cfg); seen.add(cfg.name)
+            logger.info(f"[AI Config] {cfg.name} is ACTIVE (free)")
+    
+    # Провайдеры с ключами (если настроены)
+    for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG, NOVITA_CONFIG, TOGETHER_CONFIG, KODACODE_CONFIG]:
         if cfg.name not in seen and cfg.is_active:
             providers.append(cfg); seen.add(cfg.name)
             logger.info(f"[AI Config] {cfg.name} is ACTIVE")
+    
     logger.info(f"[AI Config] Total active providers: {len(providers)}")
     return providers
 

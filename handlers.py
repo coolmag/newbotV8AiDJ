@@ -152,8 +152,58 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- ADMIN / COMMANDS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from gemini_init import HAS_GENAI
-    status = "✅ Active" if HAS_GENAI else "❌ Inactive"
-    await update.message.reply_text(f"📊 System Status\nNLP (Gemini): {status}")
+    from ai_config import get_active_providers
+    
+    gemini_status = "✅ Active" if HAS_GENAI else "❌ Inactive"
+    providers = get_active_providers()
+    provider_list = "\n".join([f"• {p.name}: ✅" for p in providers])
+    
+    text = f"""📊 *System Status*
+
+🤖 AI Провайдеры:
+{provider_list if provider_list else '• (нет активных)'}
+
+🌐 NLP (Gemini): {gemini_status}
+
+📝 Логика работы:
+• Бот перебирает провайдеров по очереди
+• Если один не отвечает — пробует следующий
+• Последний fallback — Gemini"""
+    
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+async def test_ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестирует AI провайдеров"""
+    chat_id = update.effective_chat.id
+    user_name = update.effective_user.first_name
+    
+    msg = await update.message.reply_text("🔄 Тестирую AI провайдеры...")
+    
+    test_responses = []
+    
+    # Тестируем Gemini
+    from gemini_init import HAS_GENAI
+    if HAS_GENAI:
+        try:
+            from gemini_init import generate_smart
+            result = generate_smart("Привет! Ответь коротко: 'OK'")
+            if result and len(result.strip()) > 0:
+                test_responses.append(f"✅ Gemini: OK ({len(result)} символов)")
+            else:
+                test_responses.append(f"⚠️ Gemini: пустой ответ")
+        except Exception as e:
+            test_responses.append(f"❌ Gemini: {str(e)[:50]}")
+    else:
+        test_responses.append(f"❌ Gemini: не настроен")
+    
+    # Показываем результат
+    text = f"""🧪 *Тест AI*
+
+{chr(10).join(test_responses)}
+
+💡 Бот автоматически переключится на работающий провайдер."""
+    
+    await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -177,7 +227,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("set_mode|"):
         mode = query.data.split("|")[1]
         ChatManager.set_mode(update.effective_chat.id, mode)
-        await context.bot.send_message(update.effective_chat.id, f"Режим изменен: {mode}")
+        
+        # Если включаем викторину - сразу запускаем первый вопрос
+        if mode == "quiz":
+            from chat_service import QuizManager
+            first_question = QuizManager.start_quiz(update.effective_chat.id)
+            await context.bot.send_message(update.effective_chat.id, f"🎮 *ВИКТОРИНА* 🎮\n\n{first_question}", parse_mode=ParseMode.MARKDOWN)
+        else:
+            greeting = GREETINGS.get(mode, ["Привет!"])[0]
+            await context.bot.send_message(update.effective_chat.id, f"Режим изменен: {mode}\n\n{greeting}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎧 Aurora AI. Пиши запрос!")
@@ -202,5 +260,6 @@ def setup_handlers(app, radio, settings, downloader):
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("test_ai", test_ai_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(CallbackQueryHandler(button_callback))

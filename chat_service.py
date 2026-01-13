@@ -21,8 +21,115 @@ def _get_debug_log_path():
 
 logger = logging.getLogger(__name__)
 
-chat_histories = defaultdict(lambda: deque(maxlen=6))
+chat_histories = defaultdict(lambda: deque(maxlen=10))
 chat_modes = defaultdict(lambda: "default")
+
+# === QUIZ STATE MANAGEMENT ===
+# Хранит состояние викторины для каждого чата
+quiz_state = {}  # {chat_id: {"asked": set(), "last_question": str, "question_num": int}}
+
+# База вопросов викторины
+QUIZ_QUESTIONS = [
+    {"q": "Какой инструмент играет соло в песне 'Smoke on the Water' группы Deep Purple?", "a": ["гитара", "электрогитара"]},
+    {"q": "Какой жанр музыки ассоциируется с группой 'The Beatles'?", "a": ["рок", "рок-н-ролл"]},
+    {"q": "Какой инструмент играет основную мелодию в песне 'Bohemian Rhapsody' группы Queen?", "a": ["пианино", "фортепиано"]},
+    {"q": "Какой певец известен как 'Король поп-музыки'?", "a": ["майкл джексон", "michael jackson"]},
+    {"q": "Какой музыкальный инструмент ассоциируется с Джими Хендриксом?", "a": ["электрогитара", "гитара"]},
+    {"q": "Какой инструмент играет соло в песне 'Stairway to Heaven' группы 'Led Zeppelin'?", "a": ["электрогитара", "гитара"]},
+    {"q": "Какой жанр музыки ассоциируется с группой 'Queen'?", "a": ["рок"]},
+    {"q": "Какой инструмент играет соло в песне 'Comfortably Numb' группы 'Pink Floyd'?", "a": ["электрогитара", "гитара"]},
+    {"q": "Какой музыкальный инструмент называют 'королём оркестра'?", "a": ["скрипка"]},
+    {"q": "Какой жанр музыки ассоциируется с электронными битами и ритмами?", "a": ["электроника", "техно", "электронная"]},
+    {"q": "Какой певец был участником группы 'The Beatles'?", "a": ["джон леннон", "пол маккартни", "джордж харрисон", "ринго старр"]},
+    {"q": "Какой инструмент является основным в джазовой музыке?", "a": ["саксофон", "пианино"]},
+    {"q": "Какой жанр музыки возник в США в начале 20 века?", "a": ["джаз", "блюз"]},
+    {"q": "Какой русский композитор написал 'Щелкунчик'?", "a": ["чайковский"]},
+    {"q": "Какой музыкальный инструмент используется в камерной музыке?", "a": ["скрипка", "виолончель", "альт"]},
+]
+
+# Команды выхода из режима викторины
+QUIZ_EXIT_COMMANDS = [
+    "выйти", "выход", "хватит", "стоп", "стоп_викторину", "стоп викторину",
+    "enough", "stop", "exit", "quit", "выйди", "выйдем", "давай радио", 
+    "включи радио", "хочу музыку", "давай музыку", "переключи", "смени режим",
+    "ясно", "было уже", "не знаю"
+]
+
+class QuizManager:
+    """Управление викториной"""
+    
+    @staticmethod
+    def is_waiting_answer(chat_id: int) -> bool:
+        """Проверяет, ожидаем ли мы ответа на вопрос"""
+        state = quiz_state.get(chat_id)
+        return state is not None and "question" in state and state["question"] is not None
+    
+    @staticmethod
+    def check_answer(chat_id: int, user_answer: str) -> Optional[str]:
+        """Проверяет ответ, возвращает реакцию или None если не в режиме викторины"""
+        state = quiz_state.get(chat_id)
+        if not state or "question" not in state or not state["question"]:
+            return None
+        
+        user_answer_lower = user_answer.lower().strip()
+        
+        # Проверяем команды выхода
+        for cmd in QUIZ_EXIT_COMMANDS:
+            if cmd in user_answer_lower:
+                QuizManager.stop(chat_id)
+                return "🏁 Викторина завершена! Если хочешь — /admin для смены режима."
+        
+        # Проверяем ответ
+        correct_answers = state.get("correct_answers", [])
+        is_correct = any(correct in user_answer_lower for correct in correct_answers)
+        
+        if is_correct:
+            result = "✅ Правильно! 🎉"
+        else:
+            correct = correct_answers[0] if correct_answers else "неизвестно"
+            result = f"❌ Неправильно! Правильный ответ: {correct}."
+        
+        # Задаём следующий вопрос
+        next_q = QuizManager._next_question(chat_id)
+        return f"{result}\n\n{next_q}"
+    
+    @staticmethod
+    def _next_question(chat_id: int) -> str:
+        """Возвращает следующий вопрос"""
+        if chat_id not in quiz_state:
+            quiz_state[chat_id] = {"asked": set(), "question": None, "correct_answers": None, "question_num": 0}
+        
+        state = quiz_state[chat_id]
+        
+        # Выбираем неиспользованный вопрос
+        available = [i for i in range(len(QUIZ_QUESTIONS)) if i not in state["asked"]]
+        
+        if not available:
+            # Все вопросы использованы - начинаем заново
+            state["asked"] = set()
+            available = list(range(len(QUIZ_QUESTIONS)))
+        
+        q_idx = random.choice(available)
+        state["asked"].add(q_idx)
+        state["question_num"] += 1
+        
+        question_data = QUIZ_QUESTIONS[q_idx]
+        state["question"] = question_data["q"]
+        state["correct_answers"] = question_data["a"]
+        
+        return f"🎯 Вопрос #{state['question_num']}: {question_data['q']} ❓"
+    
+    @staticmethod
+    def start_quiz(chat_id: int) -> str:
+        """Начинает викторину"""
+        quiz_state[chat_id] = {"asked": set(), "question": None, "correct_answers": None, "question_num": 0}
+        return QuizManager._next_question(chat_id)
+    
+    @staticmethod
+    def stop(chat_id: int):
+        """Останавливает викторину"""
+        if chat_id in quiz_state:
+            del quiz_state[chat_id]
 
 class ChatManager:
     @staticmethod
@@ -165,7 +272,6 @@ class ChatManager:
         try:
             logger.info(f"[KodaCode] Calling {provider.base_url} with model {provider.model}")
             
-            # KodaCode использует стандартный OpenAI-совместимый формат
             headers = {
                 "Authorization": f"Bearer {provider.api_key}",
                 "Content-Type": "application/json"
@@ -189,50 +295,10 @@ class ChatManager:
             else:
                 error_text = resp.text[:200]
                 logger.warning(f"[KodaCode] Status {resp.status_code}: {error_text}")
-                # Если 429 - это rate limit, вернем None чтобы попробовать следующий провайдер
                 if resp.status_code == 429:
                     return None
         except Exception as e:
             logger.warning(f"[KodaCode] Error: {e}")
-        return None
-
-    @staticmethod
-    async def _call_huggingface(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
-        """HuggingFace Inference API - использует параметр 'inputs'"""
-        try:
-            # Формируем текст из сообщений
-            prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-            
-            headers = {"Authorization": f"Bearer {provider.api_key}"}
-            payload = {"inputs": prompt, "parameters": {"max_new_tokens": 150, "return_full_text": False}}
-            
-            logger.info(f"[HuggingFace] Calling {provider.base_url}")
-            resp = await client.post(provider.base_url, json=payload, headers=headers, timeout=15.0)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                logger.info(f"[HuggingFace] Response type: {type(data)}, keys: {data.keys() if isinstance(data, dict) else 'list'}")
-                
-                # HF возвращает объект с generated_text или список
-                if isinstance(data, dict) and "generated_text" in data:
-                    result = data["generated_text"]
-                    logger.info(f"[HuggingFace] Got result from dict, length: {len(result)}")
-                    return result
-                elif isinstance(data, list) and len(data) > 0:
-                    # Может быть список с объектом
-                    item = data[0]
-                    if isinstance(item, dict) and "generated_text" in item:
-                        result = item["generated_text"]
-                        logger.info(f"[HuggingFace] Got result from list[0], length: {len(result)}")
-                        return result
-                    elif isinstance(item, str):
-                        # Иногда возвращает просто текст
-                        logger.info(f"[HuggingFace] Got result from list[0] str, length: {len(item)}")
-                        return item
-            else:
-                logger.warning(f"[HuggingFace] Status {resp.status_code}: {resp.text[:200]}")
-        except Exception as e:
-            logger.warning(f"[HuggingFace] Error: {e}")
         return None
 
     @staticmethod
@@ -289,14 +355,24 @@ class ChatManager:
 
     @staticmethod
     async def get_response(chat_id: int, user_text: str, user_name: str) -> str:
-        # #region agent log
-        try:
-            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"chat_service.py:86","message":"get_response ENTRY","data":{"chat_id":chat_id,"user_text":user_text[:50],"user_name":user_name},"timestamp":int(asyncio.get_event_loop().time()*1000)})+"\n")
-        except: pass
-        # #endregion
-        
         mode = chat_modes[chat_id]
+        
+        # === ПРОВЕРКА РЕЖИМА ВИКТОРИНЫ ===
+        if mode == "quiz" and QuizManager.is_waiting_answer(chat_id):
+            quiz_result = QuizManager.check_answer(chat_id, user_text)
+            if quiz_result:
+                # Добавляем в историю для контекста
+                chat_histories[chat_id].append({"role": "user", "content": user_text})
+                chat_histories[chat_id].append({"role": "assistant", "content": quiz_result})
+                return quiz_result
+        
+        # === ПРОВЕРКА ЗАПУСКА ВИКТОРИНЫ В РЕЖИМЕ QUIZ ===
+        if mode == "quiz" and not QuizManager.is_waiting_answer(chat_id):
+            # Первый вопрос викторины
+            quiz_result = QuizManager.start_quiz(chat_id)
+            chat_histories[chat_id].append({"role": "assistant", "content": quiz_result})
+            return quiz_result
+        
         history = chat_histories[chat_id]
         messages = [{"role": "system", "content": get_system_prompt(mode)}]
         for msg in history: messages.append(msg)
@@ -327,8 +403,6 @@ class ChatManager:
                 try:
                     if provider.name == "GigaChat":
                         res = await ChatManager._call_gigachat(http_client, provider, messages)
-                    elif provider.name == "HuggingFace":
-                        res = await ChatManager._call_huggingface(http_client, provider, messages)
                     elif provider.name == "Anthropic":
                         res = await ChatManager._call_anthropic(http_client, provider, messages)
                     elif provider.name == "Cohere":
