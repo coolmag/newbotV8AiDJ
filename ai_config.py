@@ -44,7 +44,7 @@ ANTHROPIC_CONFIG = AIProviderConfig("Anthropic", os.getenv("ANTHROPIC_API_KEY", 
 KODACODE_CONFIG = AIProviderConfig("KodaCode", os.getenv("KODACODE_API_KEY", ""), os.getenv("KODACODE_BASE_URL", "https://kodacode.ru/v1"), os.getenv("KODACODE_MODEL", "gpt-4o"), bool(os.getenv("KODACODE_API_KEY")))
 
 GEMINI_KEYS = _parse_gemini_keys()
-GEMINI_CONFIGS = [AIProviderConfig(name=f"Gemini_{i+1}", api_key=key, base_url="", model="", is_active=bool(key), key_index=i) for i, key in enumerate(GEMINI_KEYS)]
+GEMINI_CONFIGS = []  # Gemini используется через gemini_init.py
 
 def get_active_providers() -> List[AIProviderConfig]:
     providers, seen = [], set()
