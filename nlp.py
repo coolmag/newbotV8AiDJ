@@ -126,7 +126,8 @@ Return JSON ONLY: {{"intent": "search"|"radio"|"chat", "query": "search query"}}
         text = generate_smart(prompt)
         
         if not text:
-            return "chat", ""
+            logger.warning(f"[NLP] AI returned empty, using default chat")
+            return "chat", message  # Используем оригинальное сообщение!
             
         text = text.replace("```json", "").replace("```", "").strip()
         data = json.loads(text)
@@ -137,8 +138,12 @@ Return JSON ONLY: {{"intent": "search"|"radio"|"chat", "query": "search query"}}
         if intent == "radio" and not query:
             query = "популярные треки"
             
+        # Если intent=chat, используем оригинальное сообщение как query
+        if intent == "chat" and not query:
+            query = message
+            
         return intent, query
 
     except Exception as e:
-        logger.warning(f"[NLP] Error: {e}")
-        return "chat", ""
+        logger.warning(f"[NLP] AI Error: {e}, using default chat")
+        return "chat", message  # Fallback на оригинальное сообщение
