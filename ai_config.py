@@ -26,52 +26,13 @@ def _parse_gemini_keys() -> List[str]:
         return [single_key] if single_key else []
     return [k.strip() for k in keys_env.split(",") if k.strip()]
 
-# === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ ===
-# Puter требует API ключ - активируем только если есть ключ в окружении
-PUTER_CONFIG = AIProviderConfig(
-    "Puter", 
-    os.getenv("PUTER_API_KEY", ""), 
-    "https://api.puter.com/v1/chat/completions", 
-    "gpt-4o", 
-    bool(os.getenv("PUTER_API_KEY"))
-)
+# === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа) ===
+# ВНИМАНИЕ: OpenRouter free модели выдают мусор — отключаем!
+# OPENROUTER_MISTRAL_FREE = AIProviderConfig(...)
+# OPENROUTER_QWEN_FREE = AIProviderConfig(...)
+# OPENROUTER_LLAMA_FREE = AIProviderConfig(...)
 
-# HuggingFace - ОТКЛЮЧЕН (старый API несовместим, требует нового формата)
-# HF_CONFIG = AIProviderConfig(
-#     "HuggingFace", 
-#     os.getenv("HF_TOKEN", ""), 
-#     "https://api-inference.huggingface.co/models/meta-llama/Llama-3-8B-Instruct",
-#     "meta-llama/Llama-3-8B-Instruct", 
-#     bool(os.getenv("HF_TOKEN"))
-# )
-
-# OpenRouter - бесплатные модели (могут быть перегружены, но работают)
-OPENROUTER_MISTRAL_FREE = AIProviderConfig(
-    "OpenRouterMistral", 
-    os.getenv("OPENROUTER_API_KEY", ""), 
-    "https://openrouter.ai/api/v1/chat/completions", 
-    "mistralai/mistral-7b-instruct:free", 
-    bool(os.getenv("OPENROUTER_API_KEY"))
-)
-
-# Более стабильная модель
-OPENROUTER_QWEN_FREE = AIProviderConfig(
-    "OpenRouterQwen", 
-    os.getenv("OPENROUTER_API_KEY", ""), 
-    "https://openrouter.ai/api/v1/chat/completions", 
-    "qwen/qwen-2.5-7b-instruct:free", 
-    bool(os.getenv("OPENROUTER_API_KEY"))
-)
-
-OPENROUTER_LLAMA_FREE = AIProviderConfig(
-    "OpenRouterLlama", 
-    os.getenv("OPENROUTER_API_KEY", ""), 
-    "https://openrouter.ai/api/v1/chat/completions", 
-    "meta-llama/llama-3.2-3b-instruct:free", 
-    bool(os.getenv("OPENROUTER_API_KEY"))
-)
-
-# Nexra - бесплатный провайдер
+# Nexra — полностью бесплатный провайдер (проверить)
 NEXRA_CONFIG = AIProviderConfig(
     "Nexra", 
     "", 
@@ -129,19 +90,13 @@ GEMINI_CONFIGS = []  # Gemini используется через gemini_init.py
 def get_active_providers() -> List[AIProviderConfig]:
     providers, seen = [], set()
     
-    # === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа) ===
-    # OpenRouter free модели — работают без ключа
-    for cfg in [OPENROUTER_MISTRAL_FREE, OPENROUTER_QWEN_FREE, OPENROUTER_LLAMA_FREE]:
-        if cfg.name not in seen and cfg.is_active:
-            providers.append(cfg); seen.add(cfg.name)
-            logger.info(f"[AI Config] {cfg.name} is ACTIVE (free, no key)")
-    
-    # Nexra — полностью бесплатный
-    if "Nexra" not in seen and NEXRA_CONFIG.is_active:
-        providers.append(NEXRA_CONFIG); seen.add("Nexra")
+    # === Полностью бесплатные провайдеры (без ключа) ===
+    # Nexra — проверить работает ли
+    if NEXRA_CONFIG.name not in seen and NEXRA_CONFIG.is_active:
+        providers.append(NEXRA_CONFIG); seen.add(NEXRA_CONFIG.name)
         logger.info(f"[AI Config] Nexra is ACTIVE (free)")
     
-    # === ПРОВАЙДЕРЫ С БЕСПЛАТНЫМ TIER (нужен ключ) ===
+    # === Провайдеры с БЕСПЛАТНЫМ TIER (нужен ключ, но есть free) ===
     # Groq — отличный бесплатный tier!
     for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG]:
         if cfg.name not in seen and cfg.is_active:

@@ -24,13 +24,38 @@ RADIO_MOODS = {
 }
 
 # Слова для исключения из artist detection
-EXCLUDE_ARTISTS = ["что", "такое", "это", "нашу", "наш", "радио", "музыку", "трек", "песню", "включи", "давай", "поставь"]
+EXCLUDE_ARTISTS = ["что", "такое", "это", "нашу", "наш", "радио", "музыку", "трек", "песню", "включи", "давай", "поставь", "послушаем", "хочу", "мне"]
 
 def analyze_message(message: str) -> Tuple[str, Optional[str]]:
     msg_lower = message.lower().strip()
     logger.info(f"[NLP] Analyzing: '{message}' -> '{msg_lower}'")
     
     # === ЭВРИСТИКИ ДЛЯ РАДИО ===
+    
+    # 0. СПЕЦИАЛЬНЫЕ ПАТТЕРНЫ (до всего остального!)
+    # "давай послушаем [жанр/настроение]" -> не как artist detection!
+    special_patterns = [
+        (r"давай\s+(послушаем\s+)?(советск\w*|советск\w*\s+грув|грув|рок|метал|хип-хоп|рэп|поп|джаз|блюз|электроника|techno|house|chill|lofi|sad|happy|party)", "radio"),
+        (r"послушаем\s+(советск\w*|советск\w*\s+грув|грув|рок|метал|хип-хоп|рэп| поп|джаз|блюз|электроника)", "radio"),
+        (r"хочу\s+(советск\w*|советск\w*\s+грув|грув|рок|метал|хип-хоп|рэп| поп|джаз|блюз|электроника)", "radio"),
+        (r"включи\s+(советск\w*|советск\w*\s+грув|грув|рок|метал|хип-хоп|рэп| поп|джаз|блюз|электроника)", "radio"),
+    ]
+    
+    # Проверяем специальные паттерны для жанров
+    if re.search(r"(советск\w*\s*грув|советск\w*|грув)", msg_lower):
+        logger.info(f"[NLP] Special pattern: советский грув")
+        return "radio", "советский грув"
+    
+    for p, intent in special_patterns:
+        if re.search(p, msg_lower):
+            logger.info(f"[NLP] Special pattern matched: {p}")
+            # Извлекаем жанр из сообщения
+            match = re.search(p, msg_lower)
+            if match:
+                genre = match.group(2) if match.group(2) else ""
+                if genre:
+                    return intent, f"{genre} музыка"
+            return intent, "популярные треки"
     
     # 1. "Давай нашу" -> включить треки, которые пользователь уже слушал
     our_patterns = [
@@ -49,10 +74,17 @@ def analyze_message(message: str) -> Tuple[str, Optional[str]]:
             return "radio", "похожее на то что слушали"
     
     # 2. "Давай [исполнитель]" -> включить радио с исполнителем
-    artist_match = re.search(r"(?:давай|включи|поставь)\s+([а-яёa-z]+)", msg_lower)
+    # НЕ срабатывает для жанров/настроений!
+    artist_patterns = [
+        r"(?:давай|включи|поставь|хочу)\s+(?:послушаем\s+)?([а-яёa-z]+)",
+    ]
+    
+    artist_match = re.search(artist_patterns[0], msg_lower)
     if artist_match:
         artist = artist_match.group(1)
-        if artist and len(artist) > 2 and artist not in EXCLUDE_ARTISTS:
+        # Проверяем что это не жанр и не слово из исключений
+        genre_keywords = ["рок", "метал", "поп", "джаз", "блюз", "грув", "электро", "хип-хоп", "рэп", "реп", "техно", "хаус", "чилл", "лофи", "ло-fi", "чилаут", "сонг", "трек", "песн"]
+        if artist and len(artist) > 2 and artist not in EXCLUDE_ARTISTS and artist not in genre_keywords:
             logger.info(f"[NLP] Artist detected: {artist}")
             return "radio", f"{artist} музыка"
     
