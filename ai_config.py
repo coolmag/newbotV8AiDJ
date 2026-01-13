@@ -26,34 +26,30 @@ def _parse_gemini_keys() -> List[str]:
         return [single_key] if single_key else []
     return [k.strip() for k in keys_env.split(",") if k.strip()]
 
-# === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа) ===
-# ВНИМАНИЕ: OpenRouter free модели выдают мусор — отключаем!
-# OPENROUTER_MISTRAL_FREE = AIProviderConfig(...)
-# OPENROUTER_QWEN_FREE = AIProviderConfig(...)
-# OPENROUTER_LLAMA_FREE = AIProviderConfig(...)
+# === АКТУАЛЬНЫЕ БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа) ===
 
-# Nexra — полностью бесплатный провайдер (проверить)
-NEXRA_CONFIG = AIProviderConfig(
-    "Nexra", 
-    "", 
-    "https://api.nexra.ai/chat/completions", 
-    "openhermes", 
-    True  # Всегда активен, бесплатен
+# HuggingFace Inference API — БЕСПЛАТНО, 1000+ моделей
+HF_CONFIG = AIProviderConfig(
+    "HuggingFace",
+    os.getenv("HF_TOKEN", ""),  # Токен опционально, но лучше иметь
+    "https://api-inference.huggingface.co/models/",
+    "microsoft/Phi-3-mini-4k-instruct",  # Быстрая модель
+    bool(os.getenv("HF_TOKEN", ""))  # Активен если есть токен
 )
 
-# === ПРОВАЙДЕРЫ С КЛЮЧАМИ ===
-GIGACHAT_CONFIG = AIProviderConfig("GigaChat", os.getenv("GIGACHAT_CREDENTIALS", ""), "https://gigachat.devices.sberbank.ru/api/v1", "GigaChat", bool(os.getenv("GIGACHAT_CREDENTIALS")))
+# === ПРОВАЙДЕРЫ С БЕСПЛАТНЫМ TIER (нужен ключ, но есть free credits) ===
 
-# Groq - САМЫЙ БЫСТРЫЙ и стабильный (бесплатный tier!)
+# Groq - Был бесплатным, но требует валидный ключ
+# Проверить ключ на https://console.groq.com/keys
 GROQ_CONFIG = AIProviderConfig(
     "Groq", 
     os.getenv("GROQ_API_KEY", ""), 
     "https://api.groq.com/openai/v1/chat/completions", 
-    "llama-3.1-8b-instruct",  # Быстрая и надёжная модель
+    "llama-3.3-70b-versatile",  # Обновлённая модель 2025
     bool(os.getenv("GROQ_API_KEY"))
 )
 
-# DeepSeek - стабильный и недорогой
+# DeepSeek - Не работает без баланса
 DEEPSEEK_CONFIG = AIProviderConfig(
     "DeepSeek", 
     os.getenv("DEEPSEEK_API_KEY", ""), 
@@ -62,27 +58,14 @@ DEEPSEEK_CONFIG = AIProviderConfig(
     bool(os.getenv("DEEPSEEK_API_KEY"))
 )
 
-# Novita AI - хороший бесплатный tier
-NOVITA_CONFIG = AIProviderConfig(
-    "Novita", 
-    os.getenv("NOVITA_API_KEY", ""), 
-    "https://api.novita.ai/v3/openai/chat/completions", 
-    "meta-llama/llama-3.3-70b-instruct", 
-    bool(os.getenv("NOVITA_API_KEY"))
+# OpenRouter — даёт бесплатные кредиты при регистрации
+OPENROUTER_CONFIG = AIProviderConfig(
+    "OpenRouter",
+    os.getenv("OPENROUTER_API_KEY", ""),
+    "https://openrouter.ai/api/v1",
+    "anthropic/claude-3-haiku",  # Бесплатная модель
+    bool(os.getenv("OPENROUTER_API_KEY"))
 )
-
-# Together AI - стабильный
-TOGETHER_CONFIG = AIProviderConfig(
-    "Together", 
-    os.getenv("TOGETHER_API_KEY", ""), 
-    "https://api.together.xyz/v1/chat/completions", 
-    "meta-llama/Llama-3-8b-chat-hf", 
-    bool(os.getenv("TOGETHER_API_KEY"))
-)
-PERPLEXITY_CONFIG = AIProviderConfig("Perplexity", os.getenv("PERPLEXITY_API_KEY", ""), "https://api.perplexity.ai/chat/completions", "llama-3.1-sonar-small-128k-online", bool(os.getenv("PERPLEXITY_API_KEY")))
-COHERE_CONFIG = AIProviderConfig("Cohere", os.getenv("COHERE_API_KEY", ""), "https://api.cohere.ai/v1/chat", "command-r-plus", bool(os.getenv("COHERE_API_KEY")))
-ANTHROPIC_CONFIG = AIProviderConfig("Anthropic", os.getenv("ANTHROPIC_API_KEY", ""), "https://api.anthropic.com/v1/messages", "claude-3-haiku-20240307", bool(os.getenv("ANTHROPIC_API_KEY")))
-KODACODE_CONFIG = AIProviderConfig("KodaCode", os.getenv("KODACODE_API_KEY", ""), os.getenv("KODACODE_BASE_URL", "https://kodacode.ru/v1"), os.getenv("KODACODE_MODEL", "gpt-4o"), bool(os.getenv("KODACODE_API_KEY")))
 
 GEMINI_KEYS = _parse_gemini_keys()
 GEMINI_CONFIGS = []  # Gemini используется через gemini_init.py
@@ -90,24 +73,17 @@ GEMINI_CONFIGS = []  # Gemini используется через gemini_init.py
 def get_active_providers() -> List[AIProviderConfig]:
     providers, seen = [], set()
     
-    # === Полностью бесплатные провайдеры (без ключа) ===
-    # Nexra — проверить работает ли
-    if NEXRA_CONFIG.name not in seen and NEXRA_CONFIG.is_active:
-        providers.append(NEXRA_CONFIG); seen.add(NEXRA_CONFIG.name)
-        logger.info(f"[AI Config] Nexra is ACTIVE (free)")
+    # === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа или с опциональным) ===
+    # HuggingFace Inference API — полностью бесплатный
+    if HF_CONFIG.name not in seen and HF_CONFIG.is_active:
+        providers.append(HF_CONFIG); seen.add(HF_CONFIG.name)
+        logger.info(f"[AI Config] HuggingFace is ACTIVE (free tier)")
     
-    # === Провайдеры с БЕСПЛАТНЫМ TIER (нужен ключ, но есть free) ===
-    # Groq — отличный бесплатный tier!
-    for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG]:
+    # === Провайдеры с БЕСПЛАТНЫМ TIER (нужен ключ) ===
+    for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG, OPENROUTER_CONFIG]:
         if cfg.name not in seen and cfg.is_active:
             providers.append(cfg); seen.add(cfg.name)
             logger.info(f"[AI Config] {cfg.name} is ACTIVE (free tier)")
-    
-    # === ПРОВАЙДЕРЫ С КЛЮЧАМИ (если настроены) ===
-    for cfg in [NOVITA_CONFIG, KODACODE_CONFIG]:
-        if cfg.name not in seen and cfg.is_active:
-            providers.append(cfg); seen.add(cfg.name)
-            logger.info(f"[AI Config] {cfg.name} is ACTIVE")
     
     logger.info(f"[AI Config] Total active providers: {len(providers)}")
     return providers
@@ -120,3 +96,16 @@ def get_gemini_client_for_key(key_index: int = 0):
         except Exception as e:
             logger.error(f"[Gemini] Failed: {e}")
     return None
+
+# === НЕИСПОЛЬЗУЕМЫЕ ПРОВАЙДЕРЫ (отключены) ===
+# NEXRA_CONFIG - DNS error, домен не существует
+# GIGACHAT_CONFIG - требует специфичную авторизацию
+# TOGETHER_CONFIG - требует отдельный ключ
+# PERPLEXITY_CONFIG - требует отдельный ключ  
+# COHERE_CONFIG - требует отдельный ключ
+# ANTHROPIC_CONFIG - требует отдельный ключ
+# KODACODE_CONFIG - 404 ошибка, домен не существует
+# NOVITA_CONFIG - 403 недостаточно баланса
+# OPENROUTER_MISTRAL_FREE - выдавал мусор
+# OPENROUTER_QWEN_FREE - выдавал мусор
+# OPENROUTER_LLAMA_FREE - выдавал мусор

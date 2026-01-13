@@ -268,6 +268,61 @@ class ChatManager:
         return None
 
     @staticmethod
+    async def _call_huggingface(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        """HuggingFace Inference API - полностью бесплатный с БОЛЬШИМ выбором моделей"""
+        try:
+            # HF использует URL с моделью в конце
+            url = f"{provider.base_url}{provider.model}"
+            logger.info(f"[HuggingFace] Calling {url}")
+            
+            headers = {
+                "Authorization": f"Bearer {provider.api_key}" if provider.api_key else "",
+                "Content-Type": "application/json"
+            }
+            
+            # HF ожидает особый формат
+            user_text = messages[-1]["content"] if messages else ""
+            payload = {
+                "inputs": user_text,
+                "parameters": {
+                    "max_new_tokens": 150,
+                    "temperature": 0.7,
+                    "do_sample": True
+                }
+            }
+            
+            resp = await client.post(url, json=payload, headers=headers, timeout=20.0)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info(f"[HuggingFace] Response type: {type(data)}")
+                
+                # HF может вернуть строку напрямую или dict
+                if isinstance(data, str):
+                    result = data
+                elif isinstance(data, list) and len(data) > 0:
+                    result = data[0].get("generated_text", "") or str(data[0])
+                elif isinstance(data, dict) and "generated_text" in data:
+                    result = data["generated_text"]
+                else:
+                    result = str(data)
+                
+                # Убираем дублирование входного текста если есть
+                if result.startswith(user_text):
+                    result = result[len(user_text):].strip()
+                
+                if result:
+                    logger.info(f"[HuggingFace] Success, result length: {len(result)}")
+                    return result
+            else:
+                logger.warning(f"[HuggingFace] Status {resp.status_code}: {resp.text[:200]}")
+                if resp.status_code == 429:
+                    logger.warning(f"[HuggingFace] Rate limited, trying again later")
+        except Exception as e:
+            logger.error(f"[HuggingFace] Error: {e}")
+        return None
+
+    @staticmethod
     async def _call_kodacode(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
         """KodaCode API - OpenAI compatible with free models"""
         try:
@@ -408,6 +463,8 @@ class ChatManager:
                         res = await ChatManager._call_anthropic(http_client, provider, messages)
                     elif provider.name == "Cohere":
                         res = await ChatManager._call_cohere(http_client, provider, messages)
+                    elif provider.name == "HuggingFace":
+                        res = await ChatManager._call_huggingface(http_client, provider, messages)
                     elif "KodaCode" in provider.name:
                         res = await ChatManager._call_kodacode(http_client, provider, messages)
                     else:
