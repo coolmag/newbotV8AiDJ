@@ -99,47 +99,55 @@ def analyze_message(message: str) -> Tuple[str, Optional[str]]:
         query = re.sub(r"(?:радио|волну)\s*", "", msg_lower).strip()
         return "radio", query if query else "популярные треки"
     
-    # 5. Стандартные паттерны для поиска
+    # 5. Стандартные паттерны для поиска (ИСПОЛЬЗУЕТСЯ КАК ФОЛБЭК)
     search_patterns = [r"\bplay\b", r"\bвключи\b", r"\bнайди\b", r"\bиграй\b", r"\bпоставь\b"]
-    for p in search_patterns:
-        if re.search(p, msg_lower):
-            return "search", message
     
-    # === AI АНАЛИЗ ===
-    if not HAS_GENAI: 
-        return "chat", ""
-
-    try:
-        prompt = f"""Analyze message: "{message}"
+    # === AI АНАЛИЗ (основная логика) ===
+    if HAS_GENAI:
+        try:
+            # Сначала пытаемся распознать через AI
+            prompt = f"""Analyze message: "{message}"
 
 INTENTS:
 1. search (song/artist request like "включи песню", "найди трек")
-2. radio (genre/mood request like "давай чилл", "включи радио", "давай Арию")
+2. radio (genre/mood/context request like "давай чилл", "включи радио", "вруби что-то под это настроение")
 3. chat (conversation)
 
 Return JSON ONLY: {{"intent": "search"|"radio"|"chat", "query": "search query"}}"""
 
-        text = generate_smart(prompt)
-        
-        if not text:
-            logger.warning(f"[NLP] AI returned empty, using default chat")
-            return "chat", message  # Используем оригинальное сообщение!
+            text = generate_smart(prompt)
             
-        text = text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(text)
-        intent = data.get("intent", "chat")
-        query = data.get("query", "")
-        logger.info(f"[NLP] AI result: intent={intent}, query={query}")
-        
-        if intent == "radio" and not query:
-            query = "популярные треки"
-            
-        # Если intent=chat, используем оригинальное сообщение как query
-        if intent == "chat" and not query:
-            query = message
-            
-        return intent, query
+            if text:
+                text = text.replace("```json", "").replace("```", "").strip()
+                data = json.loads(text)
+                intent = data.get("intent", "chat")
+                query = data.get("query", "")
+                logger.info(f"[NLP] AI result: intent={intent}, query={query}")
+                
+                # Если AI решил, что это чат, но есть ключевые слова поиска/радио, 
+                # то это может быть ошибкой -> перепроверяем
+                is_search_keyword = any(re.search(p, msg_lower) for p in search_patterns)
+                if intent == "chat" and is_search_keyword:
+                    logger.info("[NLP] AI returned 'chat', but search keywords found. Falling back to simple search.")
+                    return "search", message
 
-    except Exception as e:
-        logger.warning(f"[NLP] AI Error: {e}, using default chat")
-        return "chat", message  # Fallback на оригинальное сообщение
+                if intent == "radio" and not query:
+                    query = "популярные треки"
+                if intent == "chat" and not query:
+                    query = message
+                    
+                return intent, query
+
+        except Exception as e:
+            logger.warning(f"[NLP] AI Error: {e}, falling back to simple patterns.")
+            # AI сломался, используем простые правила
+    
+    # === Фоллбэк на простые правила, если AI недоступен или сломался ===
+    
+    # Поиск по ключевым словам
+    for p in search_patterns:
+        if re.search(p, msg_lower):
+            return "search", message
+            
+    # Если ничего не подошло - это чат
+    return "chat", message
