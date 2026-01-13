@@ -16,7 +16,8 @@ from telegram.ext import (
 from radio import RadioManager
 from config import Settings
 from youtube import YouTubeDownloader
-from chat_service import ChatManager, PERSONAS
+from chat_service import ChatManager
+from ai_personas import PERSONAS
 # Импортируем nlp
 from nlp import analyze_message
 
