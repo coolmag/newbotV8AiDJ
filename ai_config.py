@@ -36,11 +36,11 @@ PUTER_CONFIG = AIProviderConfig(
     bool(os.getenv("PUTER_API_KEY"))
 )
 
-# HuggingFace - используем Inference API (формат для chat-комплитов)
+# HuggingFace - используем новый HF Router API
 HF_CONFIG = AIProviderConfig(
     "HuggingFace", 
     os.getenv("HF_TOKEN", ""), 
-    "https://api-inference.huggingface.co/models/meta-llama/Llama-3-8B-Instruct",
+    "https://router.huggingface.co/meta-llama/Llama-3-8B-Instruct/v1/chat/completions",
     "meta-llama/Llama-3-8B-Instruct", 
     bool(os.getenv("HF_TOKEN"))
 )

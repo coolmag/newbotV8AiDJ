@@ -115,19 +115,24 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not message_text or len(message_text) < 2: return
     
+    # Проверяем режим чата - если quiz, ответы идут сразу в AI
+    current_mode = ChatManager.get_mode(chat_id)
+    is_quiz_mode = current_mode == "quiz"
+    
+    # Проверяем, было ли последнее сообщение бота вопросом викторины (содержит ❓)
+    # В этом случае ответ пользователя должен идти в чат, а не в NLP
+    try:
+        last_message = await context.bot.fetch_message(chat_id, update.effective_message.message_id - 1)
+        is_quiz_question = last_message and last_message.from_user.id == context.bot.id and "❓" in (last_message.text or "")
+    except:
+        is_quiz_question = False
+    
     is_private = update.effective_chat.type == ChatType.PRIVATE
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
     is_mention = any(w in message_text.lower() for w in ["аврора", "aurora", "бот", "dj"])
 
-    # 1. Прямой диалог (Приват, Реплай, Меншн) -> Сразу в чат
-    if is_private or is_reply or is_mention:
-        # #region agent log
-        try:
-            import json
-            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"handlers.py:99","message":"text_handler: direct chat condition met","data":{"is_private":is_private,"is_reply":is_reply,"is_mention":is_mention},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
+    # 1. Прямой диалог или режим викторины -> Сразу в чат
+    if is_private or is_reply or is_mention or is_quiz_mode or is_quiz_question:
         await _do_chat_reply(chat_id, message_text, update.effective_user.first_name, context, update)
         return
 
@@ -138,7 +143,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"[{chat_id}] NLP Analysis: '{message_text}' -> {intent} (query: '{query}')")
     
     if intent == 'chat':
-        # Если NLP понял, что это просто болтовня - отвечаем
         await _do_chat_reply(chat_id, message_text, update.effective_user.first_name, context, update)
     elif intent == 'search':
         await _do_play(chat_id, query, context, update)
