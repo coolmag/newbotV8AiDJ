@@ -82,10 +82,42 @@ NEXRA_CONFIG = AIProviderConfig(
 
 # === ПРОВАЙДЕРЫ С КЛЮЧАМИ ===
 GIGACHAT_CONFIG = AIProviderConfig("GigaChat", os.getenv("GIGACHAT_CREDENTIALS", ""), "https://gigachat.devices.sberbank.ru/api/v1", "GigaChat", bool(os.getenv("GIGACHAT_CREDENTIALS")))
-GROQ_CONFIG = AIProviderConfig("Groq", os.getenv("GROQ_API_KEY", ""), "https://api.groq.com/openai/v1/chat/completions", "llama-3.1-8b-instruct", bool(os.getenv("GROQ_API_KEY")))
-DEEPSEEK_CONFIG = AIProviderConfig("DeepSeek", os.getenv("DEEPSEEK_API_KEY", ""), "https://api.deepseek.com/chat/completions", "deepseek-chat", bool(os.getenv("DEEPSEEK_API_KEY")))
-NOVITA_CONFIG = AIProviderConfig("Novita", os.getenv("NOVITA_API_KEY", ""), "https://api.novita.ai/v3/openai/chat/completions", "meta-llama/llama-3.3-70b-instruct", bool(os.getenv("NOVITA_API_KEY")))
-TOGETHER_CONFIG = AIProviderConfig("Together", os.getenv("TOGETHER_API_KEY", ""), "https://api.together.xyz/v1/chat/completions", "meta-llama/Llama-3-8b-chat-hf", bool(os.getenv("TOGETHER_API_KEY")))
+
+# Groq - САМЫЙ БЫСТРЫЙ и стабильный (бесплатный tier!)
+GROQ_CONFIG = AIProviderConfig(
+    "Groq", 
+    os.getenv("GROQ_API_KEY", ""), 
+    "https://api.groq.com/openai/v1/chat/completions", 
+    "llama-3.1-8b-instruct",  # Быстрая и надёжная модель
+    bool(os.getenv("GROQ_API_KEY"))
+)
+
+# DeepSeek - стабильный и недорогой
+DEEPSEEK_CONFIG = AIProviderConfig(
+    "DeepSeek", 
+    os.getenv("DEEPSEEK_API_KEY", ""), 
+    "https://api.deepseek.com/chat/completions", 
+    "deepseek-chat", 
+    bool(os.getenv("DEEPSEEK_API_KEY"))
+)
+
+# Novita AI - хороший бесплатный tier
+NOVITA_CONFIG = AIProviderConfig(
+    "Novita", 
+    os.getenv("NOVITA_API_KEY", ""), 
+    "https://api.novita.ai/v3/openai/chat/completions", 
+    "meta-llama/llama-3.3-70b-instruct", 
+    bool(os.getenv("NOVITA_API_KEY"))
+)
+
+# Together AI - стабильный
+TOGETHER_CONFIG = AIProviderConfig(
+    "Together", 
+    os.getenv("TOGETHER_API_KEY", ""), 
+    "https://api.together.xyz/v1/chat/completions", 
+    "meta-llama/Llama-3-8b-chat-hf", 
+    bool(os.getenv("TOGETHER_API_KEY"))
+)
 PERPLEXITY_CONFIG = AIProviderConfig("Perplexity", os.getenv("PERPLEXITY_API_KEY", ""), "https://api.perplexity.ai/chat/completions", "llama-3.1-sonar-small-128k-online", bool(os.getenv("PERPLEXITY_API_KEY")))
 COHERE_CONFIG = AIProviderConfig("Cohere", os.getenv("COHERE_API_KEY", ""), "https://api.cohere.ai/v1/chat", "command-r-plus", bool(os.getenv("COHERE_API_KEY")))
 ANTHROPIC_CONFIG = AIProviderConfig("Anthropic", os.getenv("ANTHROPIC_API_KEY", ""), "https://api.anthropic.com/v1/messages", "claude-3-haiku-20240307", bool(os.getenv("ANTHROPIC_API_KEY")))
@@ -96,14 +128,28 @@ GEMINI_CONFIGS = []  # Gemini используется через gemini_init.py
 
 def get_active_providers() -> List[AIProviderConfig]:
     providers, seen = [], set()
-    # Бесплатные провайдеры (без ключа или с ключом)
-    for cfg in [OPENROUTER_MISTRAL_FREE, OPENROUTER_QWEN_FREE, OPENROUTER_LLAMA_FREE, NEXRA_CONFIG]:
+    
+    # === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа) ===
+    # OpenRouter free модели — работают без ключа
+    for cfg in [OPENROUTER_MISTRAL_FREE, OPENROUTER_QWEN_FREE, OPENROUTER_LLAMA_FREE]:
         if cfg.name not in seen and cfg.is_active:
             providers.append(cfg); seen.add(cfg.name)
-            logger.info(f"[AI Config] {cfg.name} is ACTIVE (free)")
+            logger.info(f"[AI Config] {cfg.name} is ACTIVE (free, no key)")
     
-    # Провайдеры с ключами (если настроены)
-    for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG, NOVITA_CONFIG, TOGETHER_CONFIG, KODACODE_CONFIG]:
+    # Nexra — полностью бесплатный
+    if "Nexra" not in seen and NEXRA_CONFIG.is_active:
+        providers.append(NEXRA_CONFIG); seen.add("Nexra")
+        logger.info(f"[AI Config] Nexra is ACTIVE (free)")
+    
+    # === ПРОВАЙДЕРЫ С БЕСПЛАТНЫМ TIER (нужен ключ) ===
+    # Groq — отличный бесплатный tier!
+    for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG]:
+        if cfg.name not in seen and cfg.is_active:
+            providers.append(cfg); seen.add(cfg.name)
+            logger.info(f"[AI Config] {cfg.name} is ACTIVE (free tier)")
+    
+    # === ПРОВАЙДЕРЫ С КЛЮЧАМИ (если настроены) ===
+    for cfg in [NOVITA_CONFIG, KODACODE_CONFIG]:
         if cfg.name not in seen and cfg.is_active:
             providers.append(cfg); seen.add(cfg.name)
             logger.info(f"[AI Config] {cfg.name} is ACTIVE")
