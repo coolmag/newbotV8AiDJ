@@ -50,33 +50,6 @@ CLOUDFLARE_CONFIG = AIProviderConfig(
     bool(os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ACCOUNT_ID"))
 )
 
-# Groq - бесплатный tier (быстрый)
-GROQ_CONFIG = AIProviderConfig(
-    "Groq", 
-    os.getenv("GROQ_API_KEY", ""), 
-    "https://api.groq.com/openai/v1/chat/completions", 
-    "llama-3.1-8b-instruct",
-    bool(os.getenv("GROQ_API_KEY"))
-)
-
-# DeepSeek - бесплатный tier
-DEEPSEEK_CONFIG = AIProviderConfig(
-    "DeepSeek", 
-    os.getenv("DEEPSEEK_API_KEY", ""), 
-    "https://api.deepseek.com/chat/completions", 
-    "deepseek-chat", 
-    bool(os.getenv("DEEPSEEK_API_KEY"))
-)
-
-# Novita - имеет бесплатный tier
-NOVITA_CONFIG = AIProviderConfig(
-    "Novita",
-    os.getenv("NOVITA_API_KEY", ""),
-    "https://api.novita.ai/v3/openai/chat/completions", # OpenAI-совместимый эндпоинт
-    "meta-llama/llama-3-8b-instruct",
-    bool(os.getenv("NOVITA_API_KEY"))
-)
-
 # OpenRouter — даёт бесплатные кредиты при регистрации
 OPENROUTER_CONFIG = AIProviderConfig(
     "OpenRouter",
@@ -84,6 +57,15 @@ OPENROUTER_CONFIG = AIProviderConfig(
     "https://openrouter.ai/api/v1/chat/completions",
     "anthropic/claude-3-haiku",  # Бесплатная модель
     bool(os.getenv("OPENROUTER_API_KEY"))
+)
+
+# XAI (Grok) - OpenAI-совместимый API
+XAI_CONFIG = AIProviderConfig(
+    "XAI",
+    os.getenv("XAI_API_KEY", ""),
+    "https://api.x.ai/v1/chat/completions",
+    "grok-1", # Предполагаемая модель, может потребоваться корректировка
+    bool(os.getenv("XAI_API_KEY"))
 )
 
 GEMINI_KEYS = _parse_gemini_keys()
@@ -106,7 +88,8 @@ def get_active_providers() -> List[AIProviderConfig]:
         logger.info(f"[AI Config] HuggingFace is ACTIVE (free tier)")
     
     # === Провайдеры с БЕСПЛАТНЫМ TIER (нужен ключ) ===
-    for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG, NOVITA_CONFIG, OPENROUTER_CONFIG]:
+    # Оставляем только рабочие и добавленные провайдеры
+    for cfg in [OPENROUTER_CONFIG, XAI_CONFIG]:
         if cfg.name not in seen and cfg.is_active:
             providers.append(cfg)
             seen.add(cfg.name)

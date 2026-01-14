@@ -18,6 +18,7 @@ from config import Settings
 from youtube import YouTubeDownloader
 from chat_service import ChatManager
 from ai_personas import PERSONAS
+from ai_manager import AIManager
 # Импортируем nlp
 from nlp import analyze_message
 
@@ -153,26 +154,56 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- ADMIN / COMMANDS ---
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from gemini_init import HAS_GENAI
+    """
+    Проверяет реальный статус всех активных AI-провайдеров, делая тестовые запросы,
+    включая проверку резервного канала Gemini.
+    """
+    msg = await update.message.reply_text("🔄 Диагностика AI-провайдеров...")
+
+    from gemini_init import HAS_GENAI, generate_smart
     from ai_config import get_active_providers
-    
-    gemini_status = "✅ Active" if HAS_GENAI else "❌ Inactive"
+
+    # --- Проверка основных провайдеров ---
     providers = get_active_providers()
-    provider_list = "\n".join([f"• {p.name}: ✅" for p in providers])
+    tasks = [AIManager.test_provider(p) for p in providers]
+    results = await asyncio.gather(*tasks)
+
+    provider_lines = []
+    if not providers:
+        provider_lines.append("• (нет активных провайдеров в конфиге)")
+    else:
+        for provider, status in zip(providers, results):
+            provider_lines.append(f"• {provider.name}: {status}")
     
+    provider_list = "\n".join(provider_lines)
+
+    # --- Проверка резервного провайдера Gemini ---
+    gemini_status = "❌ Inactive"
+    if HAS_GENAI:
+        try:
+            # generate_smart - синхронная функция, запускаем в исполнителе
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, lambda: generate_smart("Ответь одним словом: OK"))
+            
+            if result and "OK" in result:
+                gemini_status = "✅ OK"
+            else:
+                gemini_status = "⚠️ Bad Response"
+        except Exception as e:
+            logger.error(f"[Status Check] Gemini test failed: {e}")
+            gemini_status = "❌ FAILED"
+
+    # --- Формирование и отправка ответа ---
     text = f"""📊 *System Status*
 
-🤖 AI Провайдеры:
-{provider_list if provider_list else '• (нет активных)'}
+*Основные AI провайдеры (онлайн-проверка):*
+{provider_list}
 
-🌐 NLP (Gemini): {gemini_status}
-
-📝 Логика работы:
-• Бот перебирает провайдеров по очереди
-• Если один не отвечает — пробует следующий
-• Последний fallback — Gemini"""
+*Резервный AI провайдер:*
+• Gemini (Fallback): {gemini_status}
+"""
     
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def test_ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Тестирует AI провайдеров"""
