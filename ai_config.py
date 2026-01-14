@@ -1,29 +1,4 @@
-# Cloudflare Workers AI - БЕСПЛАТНЫЙ, 100K запросов/день
-CLOUDFLARE_CONFIG = AIProviderConfig(
-    "Cloudflare",
-    "",  # Cloudflare не требует токена для Workers AI бесплатного tier
-    "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/meta/llama-3.2-1b-instruct",
-    "@cf/meta/llama-3.2-1b-instruct",
-    True  # Всегда активен, если account_id указан
-)
-
-# Replicate AI - бесплатный tier для пробного использования
-REPLICATE_CONFIG = AIProviderConfig(
-    "Replicate",
-    os.getenv("REPLICATE_API_KEY", ""),
-    "https://api.replicate.com/v1",
-    "meta/llama-3.1-8b-instruct",
-    bool(os.getenv("REPLICATE_API_KEY"))
-)
-
-# Groq - бесплатный tier (быстрый)
-GROQ_CONFIG = AIProviderConfig(
-    "Groq", 
-    os.getenv("GROQ_API_KEY", ""), 
-    "https://api.groq.com/openai/v1/chat/completions", 
-    "llama-3.1-8b-instruct",  # Меньшая модель для экономии токенов
-    bool(os.getenv("GROQ_API_KEY"))
-)import os
+import os
 import logging
 from dataclasses import dataclass
 from typing import List
