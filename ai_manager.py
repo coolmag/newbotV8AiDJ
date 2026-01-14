@@ -1,3 +1,4 @@
+# Force reload by adding a comment
 import logging
 import httpx
 import asyncio
@@ -162,3 +163,31 @@ class AIManager:
 
         logger.warning("[AIManager] All AI providers failed.")
         return None
+
+    @staticmethod
+    async def test_provider(provider: AIProviderConfig) -> str:
+        """
+        Выполняет легковесную проверку работоспособности провайдера.
+        Возвращает "✅ OK" в случае успеха или "❌ FAILED" при любой ошибке.
+        """
+        async with httpx.AsyncClient(verify=False) as http_client:
+            test_messages = [{"role": "user", "content": "Ответь одним словом: OK"}]
+            res = None
+            try:
+                # Используем ту же логику диспетчеризации, что и в get_ai_response
+                if provider.name == "OpenRouter":
+                    res = await AIManager._call_openrouter(http_client, provider, test_messages)
+                elif provider.name == "Cloudflare":
+                    res = await AIManager._call_cloudflare(http_client, provider, test_messages)
+                else: # Generic OpenAI-совместимые
+                    res = await AIManager._call_generic(http_client, provider, test_messages)
+
+                # _call-методы возвращают None при любой ошибке, что нам и нужно
+                if res and "OK" in res:
+                    return "✅ OK"
+                
+                # Если ответ не пришел или не содержит "OK", считаем проверку проваленной
+                return "❌ FAILED"
+            except Exception as e:
+                logger.error(f"[TestProvider] Unhandled exception for {provider.name}: {e}")
+                return "❌ ERROR"
