@@ -29,14 +29,13 @@ def _parse_gemini_keys() -> List[str]:
 # === АКТУАЛЬНЫЕ БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа) ===
 
 # HuggingFace Inference API — БЕСПЛАТНО, 1000+ моделей
-# ВНИМАНИЕ: Старый inference API (api-inference.huggingface.co) отключен (ошибка 410).
-# Новый router.huggingface.co требует другой интеграции. Временно деактивирован.
+# OpenAI-совместимый эндпоинт
 HF_CONFIG = AIProviderConfig(
     "HuggingFace",
     os.getenv("HF_TOKEN", ""),
-    "https://router.huggingface.co/", # Новый базовый URL
-    "microsoft/Phi-3-mini-4k-instruct",
-    False # Временно деактивирован
+    "https://router.huggingface.co/v1/chat/completions", # Новый OpenAI-совместимый URL
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # Быстрая и бесплатная модель
+    bool(os.getenv("HF_TOKEN"))
 )
 
 # === ПРОВАЙДЕРЫ С БЕСПЛАТНЫМ TIER (нужен ключ, но есть free credits) ===
