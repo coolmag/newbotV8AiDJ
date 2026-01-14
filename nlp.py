@@ -8,93 +8,108 @@ from ai_manager import AIManager
 
 logger = logging.getLogger(__name__)
 
-# === РАДИО ПАТТЕРНЫ ===
-RADIO_MOODS = {
-    # Медленное / Сон
-    "slow": ["медлен", "slow", "релакс", "расслаб", "chill", "lofi", "ambient", "instrumental", "без слов", "пианино"],
-    "sleep": ["спать", "уснуть", "сноч", "ночн", "колыбель", "lullaby", "тишина"],
-    # Грусть
-    "sad": ["груст", "печаль", "тоска", "скука", "вечер", "меланхол"],
-    # Веселье / Энергия
-    "party": ["весель", "тусовк", "танцевал", "party", "club", "energi", "хайп", "dancing", "энергич"],
-    "happy": ["радост", "счаст", "весел", "позитив"],
-    # Рок / Метал
-    "rock": ["рок", "метал", "hard", "metal", "ария", "кипелов", "король и шут"],
-    # Русские хиты
-    "russian": ["русск", "советск", "ссср", "наша", "отечеств", "виктор цой", "кино", "любэ", "звери", "би-2"],
-}
-
-# Слова для исключения из artist detection
-EXCLUDE_ARTISTS = ["что", "такое", "это", "нашу", "наш", "радио", "музыку", "трек", "песню", "включи", "давай", "поставь", "послушаем", "хочу", "мне"]
-
-def analyze_message(message: str) -> Tuple[str, Optional[str]]:
+async def analyze_message(message: str) -> Tuple[str, Optional[str]]:
+    """
+    Анализирует сообщение пользователя с помощью AI для определения намерения и формирования поискового запроса.
+    Эта функция теперь полностью асинхронна.
+    """
     msg_lower = message.lower().strip()
-    logger.info(f"[NLP] Analyzing: '{message}' -> '{msg_lower}'")
-    
-    # === ЭВРИСТИКИ ДЛЯ РАДИО (ВЫСОКИЙ ПРИОРИТЕТ) ===
-    
-    # Специальные паттерны для жанров
-    if re.search(r"(советск\w*\s*грув|советск\w*|грув)", msg_lower):
-        logger.info(f"[NLP] Special pattern: советский грув")
-        return "radio", "советский грув"
+    logger.info(f"[NLP] Analyzing with AI: '{message}'")
 
-    # "Давай нашу" и похожие
-    our_patterns = [r"давай\s+нашу", r"включи\s+нашу", r"поставь\s+нашу", r"нашу\s+музыку", r"наши\s+треки", r"то\s+что\s+слушали", r"похожее", r"в\s+стиле"]
-    for p in our_patterns:
-        if re.search(p, msg_lower):
-            logger.info(f"[NLP] Matched pattern: {p}")
-            return "radio", "похожее на то что слушали"
-            
-    # Настроение / режим
-    for mood, keywords in RADIO_MOODS.items():
-        if any(kw in msg_lower for kw in keywords):
-            logger.info(f"[NLP] Mood detected: {mood}")
-            return "radio", f"{mood} музыка"
+    # Улучшенный промпт для AI
+    prompt = f"""You are a music expert AI inside a Telegram bot. Your task is to analyze the user's message and convert it into a precise search query for YouTube Music.
 
-    # === AI АНАЛИЗ (основная логика) ===
-    try:
-        prompt = f"""Analyze the user's request for a music bot.
+Analyze the user's message to identify:
+- Genre (e.g., rock, pop, classic)
+- Sub-genre (e.g., death metal, synth-pop)
+- Era/Decade (e.g., 80s, 90s, 2020s)
+- Language/Nationality (e.g., russian, french, soviet)
+- Mood (e.g., energetic, sad, for training)
+- Specific artist or song if mentioned.
 
-INTENTS:
-- "search": Use for a request to find a SPECIFIC, NAMED song or artist. The query MUST contain the name. Examples: "включи Bohemian Rhapsody", "найди трек Rammstein - Sonne".
-- "radio": Use for a request to start a music stream based on a GENERAL IDEA, like genre, mood, context, or a vague concept. The query should be the general idea. Examples: "давай чиллвейв", "включи радио 80-х", "вруби что-то под это настроение", "поставь похожее", "удиви меня", "что-то новенькое".
-- "chat": Use for a general conversation, question, or greeting that is NOT a request for music. Examples: "привет", "как дела?", "спасибо", "кто ты?".
+Combine these elements into a single, effective search query string.
 
+The user's message is: "{message}"
+
+Return a JSON object with two fields:
+1. "intent":
+   - "radio": If the user wants a playlist, stream, or music based on a theme/genre/mood. The 'query' will be your generated YouTube search string.
+   - "search": If the user wants ONE specific track or artist. The 'query' will be the name of that track/artist.
+   - "chat": If it's a general conversation, greeting, or question not about music.
+
+2. "query": Your generated search query or the original message for 'chat'.
+
+Example 1:
+User's message: "привет давай русский рок из 90х"
+Your output:
+{{
+  "intent": "radio",
+  "query": "русский рок 90-х"
+}}
+
+Example 2:
+User's message: "что-то энергичное для тренировки"
+Your output:
+{{
+  "intent": "radio",
+  "query": "energetic music for workout"
+}}
+
+Example 3:
+User's message: "поставь queen bohemian rhapsody"
+Your output:
+{{
+  "intent": "search",
+  "query": "Queen Bohemian Rhapsody"
+}}
+
+Example 4:
+User's message: "как дела?"
+Your output:
+{{
+  "intent": "chat",
+  "query": "как дела?"
+}}
+
+Now, analyze this message:
 User's message: "{message}"
 
 Return JSON ONLY.
-{{
-  "intent": "search" | "radio" | "chat",
-  "query": "extracted search query or radio theme"
-}}"""
+"""
 
-        # Используем новый AIManager для получения ответа от любого провайдера
-        text = asyncio.run(AIManager.get_ai_response(prompt))
+    try:
+        # Прямой асинхронный вызов AIManager
+        text = await AIManager.get_ai_response(prompt)
         
         if text:
-            text = text.replace("```json", "").replace("```", "").strip()
+            # Очистка и парсинг JSON
+            text = re.sub(r"```json\s*|\s*```", "", text).strip()
             data = json.loads(text)
             intent = data.get("intent", "chat")
             query = data.get("query", "")
-            logger.info(f"[NLP] AI result: intent={intent}, query={query}")
             
-            if intent == "radio" and not query:
-                query = "популярные треки"
-            if intent == "chat" and not query:
-                query = message
-                
+            logger.info(f"[NLP] AI result: intent={intent}, query='{query}'")
+            
+            # Фоллбэк, если AI вернул пустой query
+            if not query:
+                if intent == "radio":
+                    query = "популярные треки"
+                else: # chat или search
+                    query = message
+            
             return intent, query
 
     except Exception as e:
         logger.warning(f"[NLP] AI Error: {e}, falling back to simple patterns.")
-        # AI сломался, используем простые правила
+        # AI сломался, используем старые простые правила как фоллбэк
 
-    # === ФОЛБЭК НА ПРОСТЫЕ ПРАВИЛА ===
+    # === ФОЛЛБЭК НА ПРОСТЫЕ ПРАВИЛА (если AI не сработал) ===
     search_patterns = [r"\bplay\b", r"\bвключи\b", r"\bнайди\b", r"\bиграй\b", r"\bпоставь\b"]
-    for p in search_patterns:
-        if re.search(p, msg_lower):
-            logger.info(f"[NLP] Fallback search pattern matched: {p}")
-            return "search", message
+    if any(re.search(p, msg_lower) for p in search_patterns):
+        logger.info(f"[NLP] Fallback search pattern matched.")
+        # Просто вырезаем команду, оставляем остальное как запрос
+        query = re.sub(r"|".join(search_patterns), "", msg_lower, flags=re.IGNORECASE).strip()
+        return "search", query if query else message
             
     if "радио" in msg_lower or "волну" in msg_lower:
         query = re.sub(r"(?:радио|волну)\s*", "", msg_lower).strip()

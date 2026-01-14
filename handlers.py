@@ -138,8 +138,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 2. Неявный запрос -> Анализируем через NLP
     try:
-        loop = asyncio.get_event_loop()
-        intent, query = await loop.run_in_executor(None, analyze_message, message_text)
+        intent, query = await analyze_message(message_text)
         logger.info(f"[{chat_id}] NLP Analysis: '{message_text}' -> {intent} (query: '{query}')")
     except Exception as e:
         logger.error(f"[{chat_id}] NLP error: {e}, using default chat")
