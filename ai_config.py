@@ -55,7 +55,7 @@ GROQ_CONFIG = AIProviderConfig(
     "Groq", 
     os.getenv("GROQ_API_KEY", ""), 
     "https://api.groq.com/openai/v1/chat/completions", 
-    "llama-3.1-8b-instruct",  # Меньшая модель для экономии токенов
+    "llama-3.1-8b-instruct",
     bool(os.getenv("GROQ_API_KEY"))
 )
 
@@ -66,6 +66,15 @@ DEEPSEEK_CONFIG = AIProviderConfig(
     "https://api.deepseek.com/chat/completions", 
     "deepseek-chat", 
     bool(os.getenv("DEEPSEEK_API_KEY"))
+)
+
+# Novita - имеет бесплатный tier
+NOVITA_CONFIG = AIProviderConfig(
+    "Novita",
+    os.getenv("NOVITA_API_KEY", ""),
+    "https://api.novita.ai/v3/openai/chat/completions", # OpenAI-совместимый эндпоинт
+    "meta-llama/llama-3-8b-instruct",
+    bool(os.getenv("NOVITA_API_KEY"))
 )
 
 # OpenRouter — даёт бесплатные кредиты при регистрации
@@ -97,7 +106,7 @@ def get_active_providers() -> List[AIProviderConfig]:
         logger.info(f"[AI Config] HuggingFace is ACTIVE (free tier)")
     
     # === Провайдеры с БЕСПЛАТНЫМ TIER (нужен ключ) ===
-    for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG, OPENROUTER_CONFIG]:
+    for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG, NOVITA_CONFIG, OPENROUTER_CONFIG]:
         if cfg.name not in seen and cfg.is_active:
             providers.append(cfg)
             seen.add(cfg.name)
