@@ -186,17 +186,12 @@ class AIManager:
                 else: # Generic OpenAI-совместимые
                     res = await AIManager._call_generic(http_client, provider, test_messages)
 
-                                # _call-методы возвращают None при любой ошибке, что нам и нужно
-
-                                if res and res.strip(): # Любой непустой ответ считается успешным
-
-                                    return "✅ OK"
-
-                                
-
-                                # Если ответ не пришел или пуст, считаем проверку проваленной
-
-                                return "❌ FAILED"
+                # _call-методы возвращают None при любой ошибке, что нам и нужно
+                if res and res.strip(): # Любой непустой ответ считается успешным
+                    return "✅ OK"
+                
+                # Если ответ не пришел или пуст, считаем проверку проваленной
+                return "❌ FAILED"
             except Exception as e:
                 logger.error(f"[TestProvider] Unhandled exception for {provider.name}: {e}")
                 return "❌ ERROR"
