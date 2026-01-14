@@ -33,15 +33,17 @@ class AIManager:
             if resp.status_code == 200:
                 content_type = resp.headers.get("content-type", "")
                 if "application/json" not in content_type:
-                    logger.warning(f"[OpenRouter] Unexpected content-type: {content_type}")
+                    logger.warning(f"[OpenRouter] Test failed, unexpected content-type: {content_type}, response: {resp.text[:200]}")
                     return None
                 data = resp.json()
                 if "choices" in data and data["choices"]:
                     return data["choices"][0]["message"].get("content", "")
+                else:
+                    logger.warning(f"[OpenRouter] Test failed, no choices in response: {resp.text[:200]}")
             else:
-                logger.warning(f"[OpenRouter] Status {resp.status_code}: {resp.text[:200]}")
+                logger.warning(f"[OpenRouter] Test failed, status {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
-            logger.error(f"[OpenRouter] Error: {e}", exc_info=True)
+            logger.error(f"[OpenRouter] Error during test: {e}", exc_info=True)
         return None
 
     @staticmethod
@@ -109,10 +111,12 @@ class AIManager:
                 data = resp.json()
                 if "choices" in data and data["choices"]:
                     return data["choices"][0]["message"].get("content", "")
+                else:
+                    logger.warning(f"[{provider.name}] Test failed, no choices in response: {resp.text[:200]}")
             else:
-                logger.warning(f"[{provider.name}] Status {resp.status_code}: {resp.text[:200]}")
+                logger.warning(f"[{provider.name}] Test failed, status {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
-            logger.error(f"[{provider.name}] Error: {e}", exc_info=True)
+            logger.error(f"[{provider.name}] Error during test: {e}", exc_info=True)
         return None
 
     @staticmethod
@@ -171,7 +175,7 @@ class AIManager:
         Возвращает "✅ OK" в случае успеха или "❌ FAILED" при любой ошибке.
         """
         async with httpx.AsyncClient(verify=False) as http_client:
-            test_messages = [{"role": "user", "content": "Ответь одним словом: OK"}]
+            test_messages = [{"role": "user", "content": "Hi"}] # Более универсальный тестовый запрос
             res = None
             try:
                 # Используем ту же логику диспетчеризации, что и в get_ai_response
@@ -182,12 +186,17 @@ class AIManager:
                 else: # Generic OpenAI-совместимые
                     res = await AIManager._call_generic(http_client, provider, test_messages)
 
-                # _call-методы возвращают None при любой ошибке, что нам и нужно
-                if res and "OK" in res:
-                    return "✅ OK"
-                
-                # Если ответ не пришел или не содержит "OK", считаем проверку проваленной
-                return "❌ FAILED"
+                                # _call-методы возвращают None при любой ошибке, что нам и нужно
+
+                                if res and res.strip(): # Любой непустой ответ считается успешным
+
+                                    return "✅ OK"
+
+                                
+
+                                # Если ответ не пришел или пуст, считаем проверку проваленной
+
+                                return "❌ FAILED"
             except Exception as e:
                 logger.error(f"[TestProvider] Unhandled exception for {provider.name}: {e}")
                 return "❌ ERROR"

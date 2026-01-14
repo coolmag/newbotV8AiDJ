@@ -35,7 +35,7 @@ HF_CONFIG = AIProviderConfig(
     os.getenv("HF_TOKEN", ""),
     "https://router.huggingface.co/v1/chat/completions", # Новый OpenAI-совместимый URL
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # Быстрая и бесплатная модель
-    bool(os.getenv("HF_TOKEN"))
+    False #bool(os.getenv("HF_TOKEN")) # Отключен из-за ошибки авторизации
 )
 
 # === ПРОВАЙДЕРЫ С БЕСПЛАТНЫМ TIER (нужен ключ, но есть free credits) ===
@@ -64,7 +64,7 @@ XAI_CONFIG = AIProviderConfig(
     os.getenv("XAI_API_KEY", ""),
     "https://api.x.ai/v1/chat/completions",
     "grok-1", # Предполагаемая модель, может потребоваться корректировка
-    bool(os.getenv("XAI_API_KEY"))
+    False #bool(os.getenv("XAI_API_KEY")) # Отключен из-за отсутствия кредитов
 )
 
 GEMINI_KEYS = _parse_gemini_keys()
