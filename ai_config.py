@@ -55,7 +55,7 @@ OPENROUTER_CONFIG = AIProviderConfig(
     "OpenRouter",
     os.getenv("OPENROUTER_API_KEY", ""),
     "https://openrouter.ai/api/v1/chat/completions",
-    "anthropic/claude-3-haiku",  # Бесплатная модель
+    "google/gemini-flash-1.5",  # Бесплатная и быстрая модель от Google
     bool(os.getenv("OPENROUTER_API_KEY"))
 )
 
