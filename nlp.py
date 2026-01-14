@@ -53,14 +53,20 @@ def analyze_message(message: str) -> Tuple[str, Optional[str]]:
 
     # === AI АНАЛИЗ (основная логика) ===
     try:
-        prompt = f"""Analyze message: "{message}"
+        prompt = f"""Analyze the user's request for a music bot.
 
 INTENTS:
-1. search (song/artist request like "включи песню", "найди трек")
-2. radio (genre/mood/context request like "давай чилл", "включи радио", "вруби что-то под это настроение")
-3. chat (conversation)
+- "search": Use for a request to find a SPECIFIC, NAMED song or artist. The query MUST contain the name. Examples: "включи Bohemian Rhapsody", "найди трек Rammstein - Sonne".
+- "radio": Use for a request to start a music stream based on a GENERAL IDEA, like genre, mood, context, or a vague concept. The query should be the general idea. Examples: "давай чиллвейв", "включи радио 80-х", "вруби что-то под это настроение", "поставь похожее", "удиви меня", "что-то новенькое".
+- "chat": Use for a general conversation, question, or greeting that is NOT a request for music. Examples: "привет", "как дела?", "спасибо", "кто ты?".
 
-Return JSON ONLY: {{"intent": "search"|"radio"|"chat", "query": "search query"}}"""
+User's message: "{message}"
+
+Return JSON ONLY.
+{{
+  "intent": "search" | "radio" | "chat",
+  "query": "extracted search query or radio theme"
+}}"""
 
         # Используем новый AIManager для получения ответа от любого провайдера
         text = asyncio.run(AIManager.get_ai_response(prompt))

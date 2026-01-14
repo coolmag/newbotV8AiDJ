@@ -2,6 +2,7 @@ import logging
 import httpx
 import asyncio
 import json
+import os
 
 from ai_config import get_active_providers, AIProviderConfig
 from gemini_init import generate_smart, HAS_GENAI
@@ -40,6 +41,58 @@ class AIManager:
                 logger.warning(f"[OpenRouter] Status {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             logger.error(f"[OpenRouter] Error: {e}", exc_info=True)
+        return None
+
+    @staticmethod
+    async def _call_cloudflare(client: httpx.AsyncClient, provider: AIProviderConfig, messages: list) -> str:
+        """Cloudflare Workers AI API"""
+        try:
+            # Cloudflare требует account_id в URL
+            account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+            if not account_id:
+                logger.warning(f"[Cloudflare] No account_id configured")
+                return None
+            
+            # Подставляем account_id в URL
+            url = provider.base_url.format(account_id=account_id)
+            
+            logger.info(f"[Cloudflare] Calling {url} with model {provider.model}")
+            
+            headers = {
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Cloudflare использует OpenAI-совместимый формат
+            payload = {
+                "model": provider.model,
+                "messages": messages,
+                "max_tokens": 200,
+                "temperature": 0.7
+            }
+            
+            resp = await client.post(url, json=payload, headers=headers, timeout=15.0)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info(f"[Cloudflare] Response status: {resp.status_code}, data keys: {data.keys() if isinstance(data, dict) else 'list'}")
+                
+                if isinstance(data, dict):
+                    # Cloudflare возвращает результат в структуре "result"
+                    if "result" in data and isinstance(data["result"], dict):
+                        if "response" in data["result"]:
+                            return data["result"]["response"]
+                        elif "text" in data["result"]:
+                            return data["result"]["text"]
+                    elif "response" in data:
+                        return data["response"]
+                    elif "choices" in data and data["choices"]:
+                        return data["choices"][0]["message"].get("content", "")
+            else:
+                logger.warning(f"[Cloudflare] Status {resp.status_code}: {resp.text[:200]}")
+                
+        except Exception as e:
+            logger.error(f"[Cloudflare] Error: {e}", exc_info=True)
         return None
 
     @staticmethod
@@ -83,6 +136,8 @@ class AIManager:
                 try:
                     if provider.name == "OpenRouter":
                         res = await AIManager._call_openrouter(http_client, provider, messages)
+                    elif provider.name == "Cloudflare":
+                        res = await AIManager._call_cloudflare(http_client, provider, messages)
                     else: # Groq, Deepseek и другие OpenAI-совместимые
                         res = await AIManager._call_generic(http_client, provider, messages)
                 except Exception as e:

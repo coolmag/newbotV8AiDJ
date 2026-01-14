@@ -1,4 +1,29 @@
-import os
+# Cloudflare Workers AI - БЕСПЛАТНЫЙ, 100K запросов/день
+CLOUDFLARE_CONFIG = AIProviderConfig(
+    "Cloudflare",
+    "",  # Cloudflare не требует токена для Workers AI бесплатного tier
+    "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/meta/llama-3.2-1b-instruct",
+    "@cf/meta/llama-3.2-1b-instruct",
+    True  # Всегда активен, если account_id указан
+)
+
+# Replicate AI - бесплатный tier для пробного использования
+REPLICATE_CONFIG = AIProviderConfig(
+    "Replicate",
+    os.getenv("REPLICATE_API_KEY", ""),
+    "https://api.replicate.com/v1",
+    "meta/llama-3.1-8b-instruct",
+    bool(os.getenv("REPLICATE_API_KEY"))
+)
+
+# Groq - бесплатный tier (быстрый)
+GROQ_CONFIG = AIProviderConfig(
+    "Groq", 
+    os.getenv("GROQ_API_KEY", ""), 
+    "https://api.groq.com/openai/v1/chat/completions", 
+    "llama-3.1-8b-instruct",  # Меньшая модель для экономии токенов
+    bool(os.getenv("GROQ_API_KEY"))
+)import os
 import logging
 from dataclasses import dataclass
 from typing import List
@@ -41,17 +66,25 @@ HF_CONFIG = AIProviderConfig(
 
 # === ПРОВАЙДЕРЫ С БЕСПЛАТНЫМ TIER (нужен ключ, но есть free credits) ===
 
-# Groq - Был бесплатным, но требует валидный ключ
-# Проверить ключ на https://console.groq.com/keys
+# Cloudflare Workers AI - БЕСПЛАТНЫЙ, 100K запросов/день
+CLOUDFLARE_CONFIG = AIProviderConfig(
+    "Cloudflare",
+    os.getenv("CLOUDFLARE_API_TOKEN", ""),  # API токен Cloudflare
+    "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/meta/llama-3.1-8b-instruct",
+    "@cf/meta/llama-3.1-8b-instruct",
+    bool(os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ACCOUNT_ID"))
+)
+
+# Groq - бесплатный tier (быстрый)
 GROQ_CONFIG = AIProviderConfig(
     "Groq", 
     os.getenv("GROQ_API_KEY", ""), 
     "https://api.groq.com/openai/v1/chat/completions", 
-    "llama-3.3-70b-versatile",  # Обновлённая модель 2025
+    "llama-3.1-8b-instruct",  # Меньшая модель для экономии токенов
     bool(os.getenv("GROQ_API_KEY"))
 )
 
-# DeepSeek - Не работает без баланса
+# DeepSeek - бесплатный tier
 DEEPSEEK_CONFIG = AIProviderConfig(
     "DeepSeek", 
     os.getenv("DEEPSEEK_API_KEY", ""), 
@@ -64,7 +97,7 @@ DEEPSEEK_CONFIG = AIProviderConfig(
 OPENROUTER_CONFIG = AIProviderConfig(
     "OpenRouter",
     os.getenv("OPENROUTER_API_KEY", ""),
-    "https://openrouter.ai/api/v1/chat/completions", # ИСПРАВЛЕНО: добавлен /chat/completions
+    "https://openrouter.ai/api/v1/chat/completions",
     "anthropic/claude-3-haiku",  # Бесплатная модель
     bool(os.getenv("OPENROUTER_API_KEY"))
 )
@@ -76,15 +109,23 @@ def get_active_providers() -> List[AIProviderConfig]:
     providers, seen = [], set()
     
     # === БЕСПЛАТНЫЕ ПРОВАЙДЕРЫ (без ключа или с опциональным) ===
+    # Cloudflare Workers AI - БЕСПЛАТНЫЙ (требует account_id и token)
+    if CLOUDFLARE_CONFIG.name not in seen and CLOUDFLARE_CONFIG.is_active:
+        providers.append(CLOUDFLARE_CONFIG)
+        seen.add(CLOUDFLARE_CONFIG.name)
+        logger.info(f"[AI Config] Cloudflare is ACTIVE (free tier)")
+    
     # HuggingFace Inference API — полностью бесплатный
     if HF_CONFIG.name not in seen and HF_CONFIG.is_active:
-        providers.append(HF_CONFIG); seen.add(HF_CONFIG.name)
+        providers.append(HF_CONFIG)
+        seen.add(HF_CONFIG.name)
         logger.info(f"[AI Config] HuggingFace is ACTIVE (free tier)")
     
     # === Провайдеры с БЕСПЛАТНЫМ TIER (нужен ключ) ===
     for cfg in [GROQ_CONFIG, DEEPSEEK_CONFIG, OPENROUTER_CONFIG]:
         if cfg.name not in seen and cfg.is_active:
-            providers.append(cfg); seen.add(cfg.name)
+            providers.append(cfg)
+            seen.add(cfg.name)
             logger.info(f"[AI Config] {cfg.name} is ACTIVE (free tier)")
     
     logger.info(f"[AI Config] Total active providers: {len(providers)}")

@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import ClientDisconnect
 from telegram import Update, BotCommand
 from telegram.ext import Application
 
@@ -136,6 +137,8 @@ async def telegram_webhook(request: Request):
         await tg_app.process_update(update)
     except json.JSONDecodeError:
         logger.warning("Webhook received empty or invalid JSON. Likely a webhook validation ping.")
+    except ClientDisconnect:
+        logger.warning("Client disconnected before request body was read. Likely a webhook validation ping.")
     except Exception as e:
         logger.error(f"Webhook Update Error: {e!r}", exc_info=True)
     return {"ok": True}
