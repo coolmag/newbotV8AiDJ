@@ -45,7 +45,12 @@ class YouTubeDownloader:
         self.ydl_opts = {
             "quiet": True, "no_warnings": True, "noplaylist": True,
             "format": "bestaudio/best",
-            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.m4a"),
+            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.mp3"),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
             'nocheckcertificate': True, 'socket_timeout': 15, 'retries': 3,
             'ignoreerrors': True, 'fragment_retries': 10,
             'source_address': '0.0.0.0', # Force IPv4 on some systems
@@ -210,19 +215,23 @@ class YouTubeDownloader:
         await self._cache.set(cache_key, track_info, ttl=86400)
         return track_info
 
-    async def download(self, video_id: str) -> DownloadResult:
+    async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
-            track_info = await self.get_track_info(video_id)
-            if not track_info: return DownloadResult(success=False, error_message="Info failed")
+            if not track_info:
+                track_info = await self.get_track_info(video_id)
+            if not track_info: 
+                return DownloadResult(success=False, error_message="Info failed")
             
             file_id_cache_key = f"file_id:{video_id}"
             cached_file_id = await self._cache.get(file_id_cache_key)
-            if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
+            if cached_file_id: 
+                return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
             
             existing_path = self._find_downloaded_file(video_id)
-            if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
+            if existing_path: 
+                return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
 
-            logger.info(f"[Download] Starting: {video_id}")
+            logger.info(f"[Download] Starting: {video_id} ({track_info.title})")
             loop = asyncio.get_running_loop()
             def do_download():
                 try:
@@ -230,34 +239,46 @@ class YouTubeDownloader:
                         ydl.download([video_id])
                     return True
                 except Exception as e: 
-                    logger.error(f"Download error {video_id}: {e}")
+                    logger.error(f"Download error {video_id}: {e}", exc_info=True)
                     return False
             
             success = await loop.run_in_executor(None, do_download)
-            if not success: return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
+            if not success: 
+                return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
 
             final_path = await self.wait_for_download_completion(video_id)
-            if not final_path: return DownloadResult(success=False, error_message="File lost", track_info=track_info)
+            if not final_path: 
+                return DownloadResult(success=False, error_message="File lost", track_info=track_info)
             
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
     async def cache_file_id(self, video_id: str, file_id: str):
-        await self._cache.set(f"file_id:{video_id}", file_id, ttl=0) # 0 = infinite (until eviction)
+        await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
+
+    async def invalidate_cache(self, video_id: str):
+        """Удаляет file_id из кэша, если он оказался невалидным."""
+        logger.info(f"Invalidating file_id cache for {video_id}")
+        await self._cache.delete(f"file_id:{video_id}")
 
     def _find_downloaded_file(self, video_id: str) -> Optional[Path]:
         exact_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
-        if exact_path.exists() and exact_path.stat().st_size > 1024: return exact_path
+        if exact_path.exists() and exact_path.stat().st_size > 1024: 
+            return exact_path
         return None
 
     async def wait_for_download_completion(self, video_id: str, timeout: int = 45) -> Optional[Path]:
         start_time = time.time()
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
+        # Увеличиваем таймаут, т.к. конвертация требует времени
+        timeout = 120 
         while time.time() - start_time < timeout:
             if final_path.exists() and final_path.stat().st_size > 1024:
-                # Проверка на отсутствие .part файлов (активная запись)
                 part_files = glob.glob(str(self._settings.DOWNLOADS_DIR / f"{video_id}.*.part"))
-                if not part_files: return final_path
+                if not part_files: 
+                    return final_path
             await asyncio.sleep(0.5)
+        
+        logger.error(f"Timeout waiting for file {final_path}")
         return None
 
     async def get_random_cached_tracks(self, limit: int = 10) -> List[TrackInfo]:
@@ -266,38 +287,29 @@ class YouTubeDownloader:
         """
         loop = asyncio.get_running_loop()
         
-        # 1. Ищем все mp3 файлы
-        # Используем run_in_executor, чтобы не блокировать бота тяжелой операцией ввода-вывода
         def scan_files():
             return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
         
         files = await loop.run_in_executor(None, scan_files)
-        
-        if not files:
-            return []
+        if not files: return []
 
-        # 2. Перемешиваем и берем с запасом
         random.shuffle(files)
         selected_files = files[:limit * 2]
         
+        tasks = [self.get_track_info(f.stem) for f in selected_files]
+        results = await asyncio.gather(*tasks)
+
         tracks = []
-        for file_path in selected_files:
+        for info, file_path in zip(results, selected_files):
             if len(tracks) >= limit: break
-            
-            video_id = file_path.stem
-            # Пытаемся достать метаданные из кэша
-            info = await self.get_track_info(video_id)
-            
             if info:
                 tracks.append(info)
             else:
-                # Если метаданные потерялись, создаем заглушку, чтобы трек всё равно играл
                 tracks.append(TrackInfo(
-                    identifier=video_id,
-                    title=f"Cached Track {video_id[-4:]}",
+                    identifier=file_path.stem,
+                    title=f"Cached Track {file_path.stem[-4:]}",
                     artist="Offline Archive",
                     duration=0,
                     source=Source.YOUTUBE
                 ))
-                
         return tracks
