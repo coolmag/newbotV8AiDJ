@@ -119,7 +119,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 # --- ENDPOINTS ---
 
- @app.get("/api/ai/dj")
+@app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     logger.info(f"[AI Web] Prompt: {prompt}")
     intro = await ChatManager.get_response(0, f"Intro for song: {prompt}", "User")
@@ -129,7 +129,7 @@ async def ai_dj_generate(prompt: str, request: Request):
     tracks = await downloader.search(query=prompt, limit=10)
     return {"dj_intro": intro, "playlist": tracks}
 
- @app.get("/audio/{video_id}.mp3")
+@app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
     downloader = request.app.state.downloader
     path = downloader._find_downloaded_file(video_id)
@@ -140,16 +140,16 @@ async def get_audio_file(video_id: str, request: Request):
     if path: return FileResponse(path)
     return JSONResponse(status_code=404, content={"error": "File not found"})
 
- @app.get("/api/health")
+@app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}
 
- @app.get("/api/player/playlist")
+@app.get("/api/player/playlist")
 async def get_playlist(query: str, request: Request):
     downloader = request.app.state.downloader
     tracks = await downloader.search(query=query, limit=15)
     return {"playlist": tracks}
 
- @app.post("/telegram")
+@app.post("/telegram")
 async def telegram_webhook(request: Request):
     tg_app = request.app.state.tg_app
     try:
