@@ -5,6 +5,7 @@ import os
 import glob
 import re
 import time
+import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class SilentLogger:
     def debug(self, msg: str): pass
-    def warning(self, msg: str): pass # Подавляем ворнинги, как в вашем коде
+    def warning(self, msg: str): pass
     def error(self, msg: str): logger.error(f"[yt-dlp] {msg}")
 
 class YouTubeDownloader:
@@ -50,17 +51,24 @@ class YouTubeDownloader:
             "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             'nocheckcertificate': True, 
-            'socket_timeout': 15, 
-            'retries': 3,
+            
+            # --- УЛУЧШЕНИЯ СТАБИЛЬНОСТИ ---
+            'socket_timeout': 60,       # Увеличен тайм-аут ожидания
+            'retries': 10,              # Больше попыток при срыве
             'ignoreerrors': True, 
             'fragment_retries': 10,
-            'source_address': '0.0.0.0', # IPv4 (как в вашем рабочем коде)
+            
+            # Ключевое исправление ошибки "Did not get any data blocks":
+            # Скачивание чанками по 10 МБ держит соединение живым.
+            'http_chunk_size': 10485760, 
+            
+            'source_address': '0.0.0.0', # IPv4 (как в вашем коде)
         }
         
         if cookie_file_path: 
             self.ydl_opts['cookiefile'] = cookie_file_path
             
-        logger.info("YouTubeDownloader initialized (User Config)")
+        logger.info("YouTubeDownloader initialized (Stable Chunked Mode)")
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
         if not entry: return False
@@ -86,7 +94,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v29:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v31:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -162,10 +170,9 @@ class YouTubeDownloader:
         await self._cache.set(cache_key, track_info, ttl=86400)
         return track_info
 
-    # !!! ВАЖНО: Добавлен track_info для совместимости с radio.py !!!
+    # !!! АРГУМЕНТ track_info ВОССТАНОВЛЕН !!!
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
-            # Получаем track_info, если его не передали (как в вашем коде)
             if not track_info:
                 track_info = await self.get_track_info(video_id)
 
@@ -177,7 +184,7 @@ class YouTubeDownloader:
             
             existing_path = self._find_downloaded_file(video_id)
             if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
-
+            
             logger.info(f"[Download] Starting: {video_id}")
             loop = asyncio.get_running_loop()
             def do_download():
@@ -197,7 +204,7 @@ class YouTubeDownloader:
     async def cache_file_id(self, video_id: str, file_id: str):
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
-    # Метод для radio.py (оставил для совместимости)
+    # Оставлен для совместимости
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
         await self._cache.delete(f"file_id:{video_id}")
