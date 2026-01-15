@@ -31,7 +31,7 @@ _start_time = time.time()
 
 def get_uptime(): return str(timedelta(seconds=int(time.time() - _start_time)))
 
- @asynccontextmanager
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Aurora System Starting...")
