@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class SilentLogger:
     def debug(self, msg: str): pass
-    def warning(self, msg: str): pass
+    def warning(self, msg: str): logger.warning(f"[yt-dlp] {msg}")
     def error(self, msg: str): logger.error(f"[yt-dlp] {msg}")
 
 class YouTubeDownloader:
