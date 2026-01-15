@@ -53,57 +53,43 @@ class YouTubeDownloader:
             }],
             'nocheckcertificate': True, 'socket_timeout': 15, 'retries': 3,
             'ignoreerrors': True, 'fragment_retries': 10,
-            'source_address': '0.0.0.0', # Force IPv4 on some systems
-            'js_runtimes': 'node', # Explicitly use node runtime
+            'source_address': '0.0.0.0',
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
-        logger.info("YouTubeDownloader initialized")
+        logger.info("YouTubeDownloader initialized for MP3 output")
+
+    async def invalidate_cache(self, video_id: str):
+        """Удаляет file_id из кэша."""
+        logger.info(f"[Cache] Invalidating file_id for {video_id}")
+        await self._cache.delete(f"file_id:{video_id}")
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
-        """
-        Проверяет валидность трека с защитой от ошибок типов данных.
-        """
         if not entry: return False
-        
-        # Проверка типа результата (Song / Video)
         res_type = entry.get('resultType', '').lower()
-        if res_type and res_type not in ['song', 'video']:
-            return False
-
+        if res_type and res_type not in ['song', 'video']: return False
         title = str(entry.get('title', '')).lower()
         if any(word in title for word in self.FORBIDDEN_WORDS): return False
-        
-        # Безопасное получение длительности
-        try:
-            duration_sec = int(entry.get('duration_seconds', 0))
-        except (ValueError, TypeError):
-            duration_sec = 0
+        try: duration_sec = int(entry.get('duration_seconds', 0))
+        except (ValueError, TypeError): duration_sec = 0
         
         if strict:
-            # Строгий режим: от 45 секунд до 15 минут
             if not (45 < duration_sec < 900): return False
         else:
-            # Мягкий режим: хотя бы 20 секунд (на случай интро)
             if duration_sec > 0 and duration_sec < 20: return False
 
         if is_russian_query:
             artist_list = entry.get('artists', [])
-            # Обработка разных форматов artist (список dict или что-то еще)
             artist_name = ""
-            if isinstance(artist_list, list) and artist_list:
-                artist_name = artist_list[0].get('name', '')
-            
+            if isinstance(artist_list, list) and artist_list: artist_name = artist_list[0].get('name', '')
             check_str = (title + str(artist_name)).lower()
             if not bool(re.search('[а-яА-ЯёЁ]', check_str)):
                 if strict: return False
-        
         return True
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
-            # Очистка ключа от лишних символов для кэша
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v12:{clean_query}:{search_mode}" # v12 - invalidates old cache
+            cache_key = f"yt_search_v15:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
@@ -113,89 +99,55 @@ class YouTubeDownloader:
             
             for suffix in suffixes:
                 actual_query = f"{query}{suffix}"
-                
                 def do_search():
                     try: 
-                        # Пытаемся найти песни, если не вышло - видео
                         res = self._ytmusic.search(actual_query, filter="songs", limit=limit+5)
-                        if not res:
-                            res = self._ytmusic.search(actual_query, filter="videos", limit=limit+5)
+                        if not res: res = self._ytmusic.search(actual_query, filter="videos", limit=limit+5)
                         return res
                     except Exception as e: 
                         logger.warning(f"YTMusic search error: {e}")
                         return []
-
                 results = await asyncio.get_running_loop().run_in_executor(None, do_search)
-                
-                # Сначала пробуем строгий фильтр
                 valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=True)]
-                
-                # Если мало результатов, пробуем мягкий фильтр
-                if len(valid) < 3:
-                    valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=False)]
-                
+                if len(valid) < 3: valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=False)]
                 all_valid_tracks.extend([self._parse_ytmusic_entry(e) for e in valid])
                 if len(all_valid_tracks) >= limit: break
 
-            # Аварийный поиск без фильтров, если все пусто
             if not all_valid_tracks:
-                logger.warning(f"[Search] Strict search failed for '{query}', trying emergency fallback.")
                 def emergency_search():
                     try: return self._ytmusic.search(query, limit=10)
                     except: return []
                 results = await asyncio.get_running_loop().run_in_executor(None, emergency_search)
-                # Тут strict=False и игнорируем русский язык
                 all_valid_tracks = [self._parse_ytmusic_entry(e) for e in results if self._is_track_valid(e, strict=False)]
 
-            # Удаление дубликатов по ID
             unique = []
             seen = set()
             for t in all_valid_tracks:
                 if t.identifier and t.identifier not in seen:
                     unique.append(t)
                     seen.add(t.identifier)
-
             final = unique[:limit]
-            if final: 
-                await self._cache.set(cache_key, final, ttl=3600) # 1 час кэша
-            
+            if final: await self._cache.set(cache_key, final, ttl=3600)
             return final
 
     def _parse_ytmusic_entry(self, entry: Dict) -> TrackInfo:
-        # Безопасный парсинг артистов
         artists_raw = entry.get('artists', [])
-        if isinstance(artists_raw, list):
-            artists = ", ".join([str(a.get('name', '')) for a in artists_raw if a.get('name')])
-        else:
-            artists = str(artists_raw)
-
+        if isinstance(artists_raw, list): artists = ", ".join([str(a.get('name', '')) for a in artists_raw if a.get('name')])
+        else: artists = str(artists_raw)
         title = str(entry.get('title', 'Unknown Track'))
-        
-        # Эвристика: если артист пуст, но в названии есть дефис
         if (not artists or artists == "Unknown Artist") and " - " in title:
             try:
                 parts = title.split(" - ", 1)
                 artists = parts[0].strip()
                 title = parts[1].strip()
             except: pass
-
-        # Безопасный парсинг длительности
-        try:
-            dur = int(entry.get('duration_seconds', 0))
-        except:
-            dur = 0
-            
-        # Безопасный парсинг тамбнейла
+        try: dur = int(entry.get('duration_seconds', 0))
+        except: dur = 0
         thumbs = entry.get('thumbnails', [])
         thumb_url = thumbs[-1]['url'] if thumbs and isinstance(thumbs, list) else None
-
         return TrackInfo(
             identifier=str(entry.get('videoId', '')), 
-            title=title, 
-            artist=artists or "Unknown Artist",
-            duration=dur, 
-            source=Source.YOUTUBE,
-            thumbnail_url=thumb_url
+            title=title, artist=artists or "Unknown Artist", duration=dur, source=Source.YOUTUBE, thumbnail_url=thumb_url
         )
 
     async def get_track_info(self, video_id: str) -> Optional[TrackInfo]:
@@ -208,7 +160,9 @@ class YouTubeDownloader:
             try:
                 with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                     return ydl.extract_info(video_id, download=False)
-            except Exception: return None
+            except Exception as e:
+                logger.error(f"[InfoExtract] Failed for {video_id}: {e}")
+                return None
         info = await loop.run_in_executor(None, do_extract_info)
         if not info: return None
         track_info = TrackInfo.from_yt_info(info)
@@ -217,21 +171,21 @@ class YouTubeDownloader:
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
-            if not track_info:
-                track_info = await self.get_track_info(video_id)
-            if not track_info: 
-                return DownloadResult(success=False, error_message="Info failed")
+            if not track_info: track_info = await self.get_track_info(video_id)
+            if not track_info: return DownloadResult(success=False, error_message="Info failed")
             
             file_id_cache_key = f"file_id:{video_id}"
             cached_file_id = await self._cache.get(file_id_cache_key)
             if cached_file_id: 
+                logger.info(f"[Download] Cache HIT (file_id) for {video_id}")
                 return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
             
             existing_path = self._find_downloaded_file(video_id)
             if existing_path: 
+                logger.info(f"[Download] Cache HIT (file) for {video_id}")
                 return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
 
-            logger.info(f"[Download] Starting: {video_id} ({track_info.title})")
+            logger.info(f"[Download] Starting download for: {video_id}")
             loop = asyncio.get_running_loop()
             def do_download():
                 try:
@@ -239,77 +193,45 @@ class YouTubeDownloader:
                         ydl.download([video_id])
                     return True
                 except Exception as e: 
-                    logger.error(f"Download error {video_id}: {e}", exc_info=True)
+                    logger.error(f"Download error {video_id}: {e}")
                     return False
-            
             success = await loop.run_in_executor(None, do_download)
-            if not success: 
-                return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
+            if not success: return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
 
             final_path = await self.wait_for_download_completion(video_id)
-            if not final_path: 
-                return DownloadResult(success=False, error_message="File lost", track_info=track_info)
-            
+            if not final_path: return DownloadResult(success=False, error_message="File lost", track_info=track_info)
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
     async def cache_file_id(self, video_id: str, file_id: str):
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
-    async def invalidate_cache(self, video_id: str):
-        """Удаляет file_id из кэша, если он оказался невалидным."""
-        logger.info(f"Invalidating file_id cache for {video_id}")
-        await self._cache.delete(f"file_id:{video_id}")
-
     def _find_downloaded_file(self, video_id: str) -> Optional[Path]:
         exact_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
-        if exact_path.exists() and exact_path.stat().st_size > 1024: 
-            return exact_path
+        if exact_path.exists() and exact_path.stat().st_size > 1024: return exact_path
         return None
 
-    async def wait_for_download_completion(self, video_id: str, timeout: int = 45) -> Optional[Path]:
+    async def wait_for_download_completion(self, video_id: str, timeout: int = 120) -> Optional[Path]:
         start_time = time.time()
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
-        # Увеличиваем таймаут, т.к. конвертация требует времени
-        timeout = 120 
         while time.time() - start_time < timeout:
             if final_path.exists() and final_path.stat().st_size > 1024:
                 part_files = glob.glob(str(self._settings.DOWNLOADS_DIR / f"{video_id}.*.part"))
-                if not part_files: 
-                    return final_path
+                if not part_files: return final_path
             await asyncio.sleep(0.5)
-        
-        logger.error(f"Timeout waiting for file {final_path}")
         return None
 
     async def get_random_cached_tracks(self, limit: int = 10) -> List[TrackInfo]:
-        """
-        Возвращает случайные треки, которые уже есть на диске (для офлайн режима).
-        """
         loop = asyncio.get_running_loop()
-        
-        def scan_files():
-            return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
-        
+        def scan_files(): return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
         files = await loop.run_in_executor(None, scan_files)
         if not files: return []
-
         random.shuffle(files)
         selected_files = files[:limit * 2]
-        
-        tasks = [self.get_track_info(f.stem) for f in selected_files]
-        results = await asyncio.gather(*tasks)
-
         tracks = []
-        for info, file_path in zip(results, selected_files):
+        for file_path in selected_files:
             if len(tracks) >= limit: break
-            if info:
-                tracks.append(info)
-            else:
-                tracks.append(TrackInfo(
-                    identifier=file_path.stem,
-                    title=f"Cached Track {file_path.stem[-4:]}",
-                    artist="Offline Archive",
-                    duration=0,
-                    source=Source.YOUTUBE
-                ))
+            video_id = file_path.stem
+            info = await self.get_track_info(video_id)
+            if info: tracks.append(info)
+            else: tracks.append(TrackInfo(identifier=video_id, title=f"Cached {video_id}", artist="Offline", duration=0))
         return tracks
