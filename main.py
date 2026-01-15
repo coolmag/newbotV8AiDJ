@@ -155,7 +155,7 @@ async def telegram_webhook(request: Request):
     try:
         data = await request.json()
         update = Update.de_json(data, tg_app.bot)
-        await tg_app.process_update(update)
+        asyncio.create_task(tg_app.process_update(update))
     except json.JSONDecodeError:
         logger.warning("Webhook received empty or invalid JSON. Likely a webhook validation ping.")
     except ClientDisconnect:

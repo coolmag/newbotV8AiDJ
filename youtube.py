@@ -50,6 +50,7 @@ class YouTubeDownloader:
             'nocheckcertificate': True, 'socket_timeout': 15, 'retries': 3,
             'ignoreerrors': True, 'fragment_retries': 10,
             'source_address': '0.0.0.0', # Force IPv4 on some systems
+            'js_runtimes': 'node', # Explicitly use node runtime
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
         logger.info("YouTubeDownloader initialized")
