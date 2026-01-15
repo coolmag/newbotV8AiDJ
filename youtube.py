@@ -33,15 +33,15 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(3)
         self.search_semaphore = asyncio.Semaphore(5)
         
-        # Сохраняем куки на диск для потенциального использования в поиске,
-        # НО: мы не будем скармливать их в yt-dlp для загрузки, так как это ломает обход блокировок.
+        # КУКИ: Используются ТОЛЬКО для ytmusicapi (поиск).
+        # В yt-dlp мы их не передаем, чтобы не ломать iOS-клиент.
         cookies_content = os.getenv("COOKIES_CONTENT")
         cookie_file_path = None
         if cookies_content:
             cookie_file_path = "cookies.txt"
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
-            logger.info("🍪 Куки сохранены (но изолированы от загрузчика)")
+            logger.info("🍪 Куки сохранены (используются только для поиска)")
 
         self.ydl_opts = {
             "verbose": True,
@@ -66,26 +66,23 @@ class YouTubeDownloader:
             'ignoreerrors': True, 
             'fragment_retries': 10,
             
-            # Принудительный IPv4 (критично для Railway)
             'source_address': '0.0.0.0', 
             
-            # !!! АРХИТЕКТУРНОЕ РЕШЕНИЕ: SMART TV CLIENT !!!
-            # Клиент 'tv' (телевизор) имеет самые мягкие ограничения по Geo-block и серверным IP.
-            # Мы принудительно используем его.
+            # !!! СТРАТЕГИЯ IOS !!!
+            # iOS-клиент лучше всего работает на серверах без кук.
+            # Добавлен mweb (Mobile Web) как запасной вариант.
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['tv', 'android', 'web'], # Приоритет TV
+                    'player_client': ['ios', 'mweb', 'web'],
                     'player_skip': ['js', 'configs', 'webpage'],
                 }
             },
         }
         
-        # ВНИМАНИЕ: Мы намеренно НЕ подключаем cookiefile.
-        # Наличие куков заставляет yt-dlp отключать мобильные/TV клиенты и падать в Web-режим,
-        # который на Railway заблокирован.
+        # КРИТИЧНО: Не подключаем cookiefile к yt-dlp!
         # if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
         
-        logger.info("YouTubeDownloader initialized (Protocol: Smart TV Embedded)")
+        logger.info("YouTubeDownloader initialized (Protocol: iOS Native)")
 
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
@@ -115,7 +112,8 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v23:{clean_query}:{search_mode}" 
+            # Обновляем версию кэша, чтобы сбросить старые результаты, если нужно
+            cache_key = f"yt_search_v24:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -126,6 +124,7 @@ class YouTubeDownloader:
                 actual_query = f"{query}{suffix}"
                 def do_search():
                     try: 
+                        # ytmusicapi использует куки (если есть) или работает анонимно
                         res = self._ytmusic.search(actual_query, filter="songs", limit=limit+5)
                         if not res: res = self._ytmusic.search(actual_query, filter="videos", limit=limit+5)
                         return res
