@@ -33,21 +33,20 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(3)
         self.search_semaphore = asyncio.Semaphore(5)
         
-        # Мы сохраняем куки в файл на случай, если они понадобятся для ytmusicapi (поиск),
-        # но НЕ будем передавать их в yt-dlp для скачивания, так как это ломает Android-клиент.
+        # Сохраняем куки на диск для потенциального использования в поиске,
+        # НО: мы не будем скармливать их в yt-dlp для загрузки, так как это ломает обход блокировок.
         cookies_content = os.getenv("COOKIES_CONTENT")
         cookie_file_path = None
         if cookies_content:
             cookie_file_path = "cookies.txt"
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
-            logger.info("🍪 Куки сохранены на диск (но отключены для загрузки)")
+            logger.info("🍪 Куки сохранены (но изолированы от загрузчика)")
 
         self.ydl_opts = {
-            "verbose": True, # Оставляем True для отладки, если снова что-то пойдет не так
+            "verbose": True,
             "quiet": False,
             "no_warnings": False,
-            
             "noplaylist": True,
             "format": "bestaudio/best",
             "logger": SilentLogger(),
@@ -67,23 +66,26 @@ class YouTubeDownloader:
             'ignoreerrors': True, 
             'fragment_retries': 10,
             
-            # Принудительный IPv4 (важно для Railway)
+            # Принудительный IPv4 (критично для Railway)
             'source_address': '0.0.0.0', 
             
-            # !!! ВАЖНО: Используем 'android'. 
-            # Куки НЕ подключены, чтобы этот клиент не скипался.
+            # !!! АРХИТЕКТУРНОЕ РЕШЕНИЕ: SMART TV CLIENT !!!
+            # Клиент 'tv' (телевизор) имеет самые мягкие ограничения по Geo-block и серверным IP.
+            # Мы принудительно используем его.
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],
+                    'player_client': ['tv', 'android', 'web'], # Приоритет TV
                     'player_skip': ['js', 'configs', 'webpage'],
                 }
             },
         }
         
-        # ОТКЛЮЧЕНО СПЕЦИАЛЬНО:
+        # ВНИМАНИЕ: Мы намеренно НЕ подключаем cookiefile.
+        # Наличие куков заставляет yt-dlp отключать мобильные/TV клиенты и падать в Web-режим,
+        # который на Railway заблокирован.
         # if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
         
-        logger.info("YouTubeDownloader initialized (Android Mode, No Cookies)")
+        logger.info("YouTubeDownloader initialized (Protocol: Smart TV Embedded)")
 
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
@@ -113,7 +115,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v21:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v23:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -135,12 +137,14 @@ class YouTubeDownloader:
                 if len(valid) < 3: valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=False)]
                 all_valid_tracks.extend([self._parse_ytmusic_entry(e) for e in valid])
                 if len(all_valid_tracks) >= limit: break
+
             if not all_valid_tracks:
                 def emergency_search():
                     try: return self._ytmusic.search(query, limit=10)
                     except: return []
                 results = await asyncio.get_running_loop().run_in_executor(None, emergency_search)
                 all_valid_tracks = [self._parse_ytmusic_entry(e) for e in results if self._is_track_valid(e, strict=False)]
+
             unique = []
             seen = set()
             for t in all_valid_tracks:
@@ -198,7 +202,6 @@ class YouTubeDownloader:
             
             existing_path = self._find_downloaded_file(video_id)
             if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
-            
             logger.info(f"[Download] Starting: {video_id}")
             loop = asyncio.get_running_loop()
             def do_download():
