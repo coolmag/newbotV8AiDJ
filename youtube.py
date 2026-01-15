@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class SilentLogger:
     def debug(self, msg: str): pass
-    def warning(self, msg: str): logger.warning(f"[yt-dlp] {msg}")
+    def warning(self, msg: str): pass # Подавляем ворнинги, как в вашем коде
     def error(self, msg: str): logger.error(f"[yt-dlp] {msg}")
 
 class YouTubeDownloader:
@@ -42,18 +42,25 @@ class YouTubeDownloader:
             logger.info("🍪 Куки успешно загружены!")
 
         self.ydl_opts = {
-            "quiet": True, "no_warnings": True, "noplaylist": True,
+            "quiet": True, 
+            "no_warnings": True, 
+            "noplaylist": True,
             "format": "bestaudio/best", 
             "logger": SilentLogger(),
             "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            'nocheckcertificate': True, 'socket_timeout': 30, 'retries': 10,
-            
-            # ИЗМЕНЕНИЕ 1: IPv6 вместо IPv4 для Railway (чтобы не ловить 403)
-            'source_address': '::', 
+            'nocheckcertificate': True, 
+            'socket_timeout': 15, 
+            'retries': 3,
+            'ignoreerrors': True, 
+            'fragment_retries': 10,
+            'source_address': '0.0.0.0', # IPv4 (как в вашем рабочем коде)
         }
-        if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
-        logger.info("YouTubeDownloader initialized (User Config + IPv6)")
+        
+        if cookie_file_path: 
+            self.ydl_opts['cookiefile'] = cookie_file_path
+            
+        logger.info("YouTubeDownloader initialized (User Config)")
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
         if not entry: return False
@@ -63,12 +70,10 @@ class YouTubeDownloader:
         if any(word in title for word in self.FORBIDDEN_WORDS): return False
         try: duration_sec = int(entry.get('duration_seconds', 0))
         except (ValueError, TypeError): duration_sec = 0
-        
         if strict:
             if not (45 < duration_sec < 900): return False
         else:
             if duration_sec > 0 and duration_sec < 20: return False
-
         if is_russian_query:
             artist_list = entry.get('artists', [])
             artist_name = ""
@@ -81,11 +86,9 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            # Обновил версию кэша, чтобы сбросить старые неудачные попытки
-            cache_key = f"yt_search_v28:{clean_query}:{search_mode}"
+            cache_key = f"yt_search_v29:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
-
             suffixes = ["", " music", " official audio"]
             is_russian = any(word in clean_query for word in ['советск', 'русск', 'ссср', 'песни', 'хиты'])
             all_valid_tracks = []
@@ -159,10 +162,10 @@ class YouTubeDownloader:
         await self._cache.set(cache_key, track_info, ttl=86400)
         return track_info
 
-    # ИЗМЕНЕНИЕ 2: Добавлен аргумент track_info=None для совместимости с radio.py
+    # !!! ВАЖНО: Добавлен track_info для совместимости с radio.py !!!
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
-            # Если info не передали - получаем сами (логика из твоего кода)
+            # Получаем track_info, если его не передали (как в вашем коде)
             if not track_info:
                 track_info = await self.get_track_info(video_id)
 
@@ -185,19 +188,16 @@ class YouTubeDownloader:
                 except Exception as e: 
                     logger.error(f"Download error {video_id}: {e}")
                     return False
-            
             success = await loop.run_in_executor(None, do_download)
             if not success: return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
-
             final_path = await self.wait_for_download_completion(video_id)
             if not final_path: return DownloadResult(success=False, error_message="File lost", track_info=track_info)
-            
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
     async def cache_file_id(self, video_id: str, file_id: str):
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
-    # Добавил этот метод, так как radio.py его вызывает при ошибках
+    # Метод для radio.py (оставил для совместимости)
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
         await self._cache.delete(f"file_id:{video_id}")
@@ -219,9 +219,7 @@ class YouTubeDownloader:
 
     async def get_random_cached_tracks(self, limit: int = 10) -> List[TrackInfo]:
         loop = asyncio.get_running_loop()
-        def scan_files():
-            return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
-        
+        def scan_files(): return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
         files = await loop.run_in_executor(None, scan_files)
         if not files: return []
         random.shuffle(files)
@@ -232,12 +230,5 @@ class YouTubeDownloader:
             video_id = file_path.stem
             info = await self.get_track_info(video_id)
             if info: tracks.append(info)
-            else:
-                tracks.append(TrackInfo(
-                    identifier=video_id,
-                    title=f"Cached Track {video_id[-4:]}",
-                    artist="Offline Archive",
-                    duration=0,
-                    source=Source.YOUTUBE
-                ))
+            else: tracks.append(TrackInfo(identifier=video_id, title=f"Cached {video_id}", artist="Offline", duration=0))
         return tracks
