@@ -4,7 +4,6 @@ import logging
 import os
 import glob
 import re
-import random
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -43,31 +42,26 @@ class YouTubeDownloader:
             logger.info("🍪 Куки успешно загружены!")
 
         self.ydl_opts = {
-            # ВКЛЮЧАЕМ ЛОГИ, ЧТОБЫ ВИДЕТЬ ОШИБКИ
-            "verbose": True,
-            "quiet": False, 
-            "no_warnings": False,
-            
-            "noplaylist": True,
-            "format": "bestaudio/best",
+            "quiet": True, "no_warnings": True, "noplaylist": True,
+            "format": "bestaudio/best", 
+            "logger": SilentLogger(),
+            # Конвертация в mp3 (как в вашем коде)
+            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            'nocheckcertificate': True, 
-            'socket_timeout': 30, # Увеличили таймаут
-            'retries': 5,
-            'ignoreerrors': True, 
-            'fragment_retries': 10,
+            'nocheckcertificate': True, 'socket_timeout': 30, 'retries': 10,
+            'ignoreerrors': True, 'fragment_retries': 10,
+            'source_address': '0.0.0.0', 
             
-            # УБРАЛИ source_address, так как он может мешать в контейнерах
-            # 'source_address': '0.0.0.0',
-            
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
+            # !!! ВАЖНО: Обход ошибки 403 Forbidden !!!
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['js', 'configs', 'webpage'],
+                }
+            },
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
-        logger.info("YouTubeDownloader initialized (Verbose MP3 Mode)")
+        logger.info("YouTubeDownloader initialized")
 
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
@@ -81,12 +75,10 @@ class YouTubeDownloader:
         if any(word in title for word in self.FORBIDDEN_WORDS): return False
         try: duration_sec = int(entry.get('duration_seconds', 0))
         except (ValueError, TypeError): duration_sec = 0
-        
         if strict:
             if not (45 < duration_sec < 900): return False
         else:
             if duration_sec > 0 and duration_sec < 20: return False
-
         if is_russian_query:
             artist_list = entry.get('artists', [])
             artist_name = ""
@@ -99,10 +91,9 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v17:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v19:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
-
             suffixes = ["", " music", " official audio"]
             is_russian = any(word in clean_query for word in ['советск', 'русск', 'ссср', 'песни', 'хиты'])
             all_valid_tracks = []
@@ -122,14 +113,12 @@ class YouTubeDownloader:
                 if len(valid) < 3: valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=False)]
                 all_valid_tracks.extend([self._parse_ytmusic_entry(e) for e in valid])
                 if len(all_valid_tracks) >= limit: break
-
             if not all_valid_tracks:
                 def emergency_search():
                     try: return self._ytmusic.search(query, limit=10)
                     except: return []
                 results = await asyncio.get_running_loop().run_in_executor(None, emergency_search)
                 all_valid_tracks = [self._parse_ytmusic_entry(e) for e in results if self._is_track_valid(e, strict=False)]
-
             unique = []
             seen = set()
             for t in all_valid_tracks:
@@ -164,21 +153,19 @@ class YouTubeDownloader:
         cache_key = f"track_info:{video_id}"
         cached_info = await self._cache.get(cache_key)
         if cached_info: return cached_info
-        
         loop = asyncio.get_running_loop()
         def do_extract_info():
             try:
                 with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                     return ydl.extract_info(video_id, download=False)
-            except Exception as e:
-                logger.error(f"[InfoExtract] Failed for {video_id}: {e}")
-                return None
+            except Exception: return None
         info = await loop.run_in_executor(None, do_extract_info)
         if not info: return None
         track_info = TrackInfo.from_yt_info(info)
         await self._cache.set(cache_key, track_info, ttl=86400)
         return track_info
 
+    # !!! ВАЖНО: Добавлен аргумент track_info для совместимости с radio.py !!!
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
             if not track_info: track_info = await self.get_track_info(video_id)
@@ -186,20 +173,14 @@ class YouTubeDownloader:
             
             file_id_cache_key = f"file_id:{video_id}"
             cached_file_id = await self._cache.get(file_id_cache_key)
-            if cached_file_id: 
-                logger.info(f"[Download] Cache HIT (file_id) for {video_id}")
-                return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
+            if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
             
             existing_path = self._find_downloaded_file(video_id)
-            if existing_path: 
-                logger.info(f"[Download] Cache HIT (file) for {video_id}")
-                return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
-
-            logger.info(f"[Download] Starting download for: {video_id}")
+            if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
+            logger.info(f"[Download] Starting: {video_id}")
             loop = asyncio.get_running_loop()
             def do_download():
                 try:
-                    # ВАЖНО: Тут логи будут выведены в stdout из-за verbose=True
                     with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                         ydl.download([video_id])
                     return True
@@ -208,7 +189,6 @@ class YouTubeDownloader:
                     return False
             success = await loop.run_in_executor(None, do_download)
             if not success: return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
-
             final_path = await self.wait_for_download_completion(video_id)
             if not final_path: return DownloadResult(success=False, error_message="File lost", track_info=track_info)
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
@@ -216,8 +196,11 @@ class YouTubeDownloader:
     async def cache_file_id(self, video_id: str, file_id: str):
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
+    async def invalidate_cache(self, video_id: str):
+        logger.info(f"[Cache] Invalidating file_id for {video_id}")
+        await self._cache.delete(f"file_id:{video_id}")
+
     def _find_downloaded_file(self, video_id: str) -> Optional[Path]:
-        # Ищем файл .mp3, который должен создать FFmpeg
         exact_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         if exact_path.exists() and exact_path.stat().st_size > 1024: return exact_path
         return None
