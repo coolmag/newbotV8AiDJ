@@ -33,35 +33,57 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(3)
         self.search_semaphore = asyncio.Semaphore(5)
         
+        # Мы сохраняем куки в файл на случай, если они понадобятся для ytmusicapi (поиск),
+        # но НЕ будем передавать их в yt-dlp для скачивания, так как это ломает Android-клиент.
         cookies_content = os.getenv("COOKIES_CONTENT")
         cookie_file_path = None
         if cookies_content:
             cookie_file_path = "cookies.txt"
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
-            logger.info("🍪 Куки успешно загружены!")
+            logger.info("🍪 Куки сохранены на диск (но отключены для загрузки)")
 
         self.ydl_opts = {
-            "quiet": True, "no_warnings": True, "noplaylist": True,
-            "format": "bestaudio/best", 
+            "verbose": True, # Оставляем True для отладки, если снова что-то пойдет не так
+            "quiet": False,
+            "no_warnings": False,
+            
+            "noplaylist": True,
+            "format": "bestaudio/best",
             "logger": SilentLogger(),
-            # Конвертация в mp3
-            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+            
+            # Конвертация в MP3
+            "postprocessors": [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            'nocheckcertificate': True, 'socket_timeout': 30, 'retries': 10,
-            'ignoreerrors': True, 'fragment_retries': 10,
+            
+            'nocheckcertificate': True, 
+            'socket_timeout': 30, 
+            'retries': 10,
+            'ignoreerrors': True, 
+            'fragment_retries': 10,
+            
+            # Принудительный IPv4 (важно для Railway)
             'source_address': '0.0.0.0', 
             
-            # !!! ВАЖНО: Используем 'ios' (поддерживает куки и обходит блокировки) !!!
+            # !!! ВАЖНО: Используем 'android'. 
+            # Куки НЕ подключены, чтобы этот клиент не скипался.
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['ios', 'web'], # iOS приоритетнее
+                    'player_client': ['android', 'web'],
                     'player_skip': ['js', 'configs', 'webpage'],
                 }
             },
         }
-        if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
-        logger.info("YouTubeDownloader initialized (iOS Client Mode)")
+        
+        # ОТКЛЮЧЕНО СПЕЦИАЛЬНО:
+        # if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
+        
+        logger.info("YouTubeDownloader initialized (Android Mode, No Cookies)")
 
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
@@ -91,7 +113,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v20:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v21:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -176,6 +198,7 @@ class YouTubeDownloader:
             
             existing_path = self._find_downloaded_file(video_id)
             if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
+            
             logger.info(f"[Download] Starting: {video_id}")
             loop = asyncio.get_running_loop()
             def do_download():
