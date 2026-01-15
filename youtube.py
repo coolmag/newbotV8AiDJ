@@ -33,65 +33,27 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(3)
         self.search_semaphore = asyncio.Semaphore(5)
         
-        # ПОДГОТОВКА КУКИ
         cookies_content = os.getenv("COOKIES_CONTENT")
         cookie_file_path = None
         if cookies_content:
             cookie_file_path = "cookies.txt"
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
-            logger.info("🍪 Куки загружены и готовы к работе")
+            logger.info("🍪 Куки успешно загружены!")
 
         self.ydl_opts = {
-            "verbose": True,
-            "quiet": False,
-            "no_warnings": False,
-            
-            "noplaylist": True,
-            "format": "bestaudio/best",
+            "quiet": True, "no_warnings": True, "noplaylist": True,
+            "format": "bestaudio/best", 
             "logger": SilentLogger(),
-            
-            "postprocessors": [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            
+            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
+            'nocheckcertificate': True, 'socket_timeout': 30, 'retries': 10,
             
-            'nocheckcertificate': True, 
-            'socket_timeout': 30, 
-            'retries': 10,
-            'ignoreerrors': True,
-            'fragment_retries': 10,
-            
-            # Убираем принудительный IPv4, чтобы дать шанс IPv6 (иногда там чище)
-            # 'source_address': '0.0.0.0', 
-            
-            # !!! СТРАТЕГИЯ MOBILE WEB (MWEB) !!!
-            # Используем клиент мобильного браузера.
-            # Он поддерживает Cookies и часто имеет меньше ограничений, чем Desktop Web.
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['mweb', 'web'], # Приоритет Mobile Web
-                    'player_skip': ['js', 'configs', 'webpage'],
-                }
-            },
-            
-            # Добавляем User-Agent от Android Chrome, чтобы соответствовать mweb
-            'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            # ИЗМЕНЕНИЕ 1: IPv6 вместо IPv4 для Railway (чтобы не ловить 403)
+            'source_address': '::', 
         }
-        
-        # ВКЛЮЧАЕМ КУКИ!
-        # Они необходимы для обхода требования "Sign in".
-        if cookie_file_path: 
-            self.ydl_opts['cookiefile'] = cookie_file_path
-        
-        logger.info("YouTubeDownloader initialized (Protocol: Mobile Web Auth)")
-
-    async def invalidate_cache(self, video_id: str):
-        logger.info(f"[Cache] Invalidating file_id for {video_id}")
-        await self._cache.delete(f"file_id:{video_id}")
+        if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
+        logger.info("YouTubeDownloader initialized (User Config + IPv6)")
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
         if not entry: return False
@@ -101,10 +63,12 @@ class YouTubeDownloader:
         if any(word in title for word in self.FORBIDDEN_WORDS): return False
         try: duration_sec = int(entry.get('duration_seconds', 0))
         except (ValueError, TypeError): duration_sec = 0
+        
         if strict:
             if not (45 < duration_sec < 900): return False
         else:
             if duration_sec > 0 and duration_sec < 20: return False
+
         if is_russian_query:
             artist_list = entry.get('artists', [])
             artist_name = ""
@@ -117,9 +81,11 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v26:{clean_query}:{search_mode}" 
+            # Обновил версию кэша, чтобы сбросить старые неудачные попытки
+            cache_key = f"yt_search_v28:{clean_query}:{search_mode}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
+
             suffixes = ["", " music", " official audio"]
             is_russian = any(word in clean_query for word in ['советск', 'русск', 'ссср', 'песни', 'хиты'])
             all_valid_tracks = []
@@ -193,9 +159,13 @@ class YouTubeDownloader:
         await self._cache.set(cache_key, track_info, ttl=86400)
         return track_info
 
+    # ИЗМЕНЕНИЕ 2: Добавлен аргумент track_info=None для совместимости с radio.py
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
-            if not track_info: track_info = await self.get_track_info(video_id)
+            # Если info не передали - получаем сами (логика из твоего кода)
+            if not track_info:
+                track_info = await self.get_track_info(video_id)
+
             if not track_info: return DownloadResult(success=False, error_message="Info failed")
             
             file_id_cache_key = f"file_id:{video_id}"
@@ -204,6 +174,7 @@ class YouTubeDownloader:
             
             existing_path = self._find_downloaded_file(video_id)
             if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
+
             logger.info(f"[Download] Starting: {video_id}")
             loop = asyncio.get_running_loop()
             def do_download():
@@ -214,15 +185,19 @@ class YouTubeDownloader:
                 except Exception as e: 
                     logger.error(f"Download error {video_id}: {e}")
                     return False
+            
             success = await loop.run_in_executor(None, do_download)
             if not success: return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
+
             final_path = await self.wait_for_download_completion(video_id)
             if not final_path: return DownloadResult(success=False, error_message="File lost", track_info=track_info)
+            
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
     async def cache_file_id(self, video_id: str, file_id: str):
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
+    # Добавил этот метод, так как radio.py его вызывает при ошибках
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
         await self._cache.delete(f"file_id:{video_id}")
@@ -244,7 +219,9 @@ class YouTubeDownloader:
 
     async def get_random_cached_tracks(self, limit: int = 10) -> List[TrackInfo]:
         loop = asyncio.get_running_loop()
-        def scan_files(): return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
+        def scan_files():
+            return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
+        
         files = await loop.run_in_executor(None, scan_files)
         if not files: return []
         random.shuffle(files)
@@ -255,5 +232,12 @@ class YouTubeDownloader:
             video_id = file_path.stem
             info = await self.get_track_info(video_id)
             if info: tracks.append(info)
-            else: tracks.append(TrackInfo(identifier=video_id, title=f"Cached {video_id}", artist="Offline", duration=0))
+            else:
+                tracks.append(TrackInfo(
+                    identifier=video_id,
+                    title=f"Cached Track {video_id[-4:]}",
+                    artist="Offline Archive",
+                    duration=0,
+                    source=Source.YOUTUBE
+                ))
         return tracks
