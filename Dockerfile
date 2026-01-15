@@ -1,22 +1,25 @@
-# Используем легкий образ Python 3.11
 FROM python:3.11-slim
 
-# 1. Установка системных зависимостей
-# ffmpeg - для аудио
-# nodejs - для подписи YouTube (ОБЯЗАТЕЛЬНО)
+# 1. Установка Node.js (критично для YouTube!) и FFmpeg
 RUN apt-get update && \
-    apt-get install -y ffmpeg nodejs npm && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+    ffmpeg \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
 
-# Настройка рабочей директории
+# Создаем ссылку node -> nodejs (yt-dlp ищет именно "node")
+RUN ln -s /usr/bin/nodejs /usr/bin/node || true
+
 WORKDIR /app
 
-# 2. Установка Python-библиотек
+# 2. Зависимости
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# 3. Копирование всего кода проекта
+# 3. Код
 COPY . .
 
-# 4. Команда запуска (использует порт Railway)
+# 4. Запуск
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
