@@ -42,24 +42,31 @@ class YouTubeDownloader:
                 f.write(cookies_content)
             logger.info("🍪 Куки успешно загружены!")
 
+        # --- ОБНОВЛЕННАЯ КОНФИГУРАЦИЯ ---
         self.ydl_opts = {
-            "quiet": True, "no_warnings": True, "noplaylist": True,
+            "quiet": True, 
+            "no_warnings": True, 
+            "noplaylist": True,
             "format": "bestaudio/best",
-            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.mp3"),
+            # Важно: сохраняем с расширением исходника, FFmpeg потом сделает mp3
+            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
+            'nocheckcertificate': True, 
+            'socket_timeout': 15, 
+            'retries': 3,
+            'ignoreerrors': True, 
+            'fragment_retries': 10,
+            'source_address': '0.0.0.0',
+            # КОНВЕРТАЦИЯ В MP3
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'nocheckcertificate': True, 'socket_timeout': 15, 'retries': 3,
-            'ignoreerrors': True, 'fragment_retries': 10,
-            'source_address': '0.0.0.0',
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
-        logger.info("YouTubeDownloader initialized for MP3 output")
+        logger.info("YouTubeDownloader initialized (MP3 Mode)")
 
     async def invalidate_cache(self, video_id: str):
-        """Удаляет file_id из кэша."""
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
         await self._cache.delete(f"file_id:{video_id}")
 
@@ -89,7 +96,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v15:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v16:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
@@ -206,6 +213,7 @@ class YouTubeDownloader:
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
     def _find_downloaded_file(self, video_id: str) -> Optional[Path]:
+        # Ищем файл .mp3, который должен создать FFmpeg
         exact_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         if exact_path.exists() and exact_path.stat().st_size > 1024: return exact_path
         return None
