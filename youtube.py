@@ -45,23 +45,23 @@ class YouTubeDownloader:
             "quiet": True, "no_warnings": True, "noplaylist": True,
             "format": "bestaudio/best", 
             "logger": SilentLogger(),
-            # Конвертация в mp3 (как в вашем коде)
+            # Конвертация в mp3
             "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             'nocheckcertificate': True, 'socket_timeout': 30, 'retries': 10,
             'ignoreerrors': True, 'fragment_retries': 10,
             'source_address': '0.0.0.0', 
             
-            # !!! ВАЖНО: Обход ошибки 403 Forbidden !!!
+            # !!! ВАЖНО: Используем 'ios' (поддерживает куки и обходит блокировки) !!!
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],
+                    'player_client': ['ios', 'web'], # iOS приоритетнее
                     'player_skip': ['js', 'configs', 'webpage'],
                 }
             },
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
-        logger.info("YouTubeDownloader initialized")
+        logger.info("YouTubeDownloader initialized (iOS Client Mode)")
 
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
@@ -91,7 +91,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v19:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v20:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -165,7 +165,6 @@ class YouTubeDownloader:
         await self._cache.set(cache_key, track_info, ttl=86400)
         return track_info
 
-    # !!! ВАЖНО: Добавлен аргумент track_info для совместимости с radio.py !!!
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
             if not track_info: track_info = await self.get_track_info(video_id)
