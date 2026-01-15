@@ -42,21 +42,24 @@ class YouTubeDownloader:
                 f.write(cookies_content)
             logger.info("🍪 Куки успешно загружены!")
 
-        # --- ОБНОВЛЕННАЯ КОНФИГУРАЦИЯ ---
         self.ydl_opts = {
-            "quiet": True, 
-            "no_warnings": True, 
+            # ВКЛЮЧАЕМ ЛОГИ, ЧТОБЫ ВИДЕТЬ ОШИБКИ
+            "verbose": True,
+            "quiet": False, 
+            "no_warnings": False,
+            
             "noplaylist": True,
             "format": "bestaudio/best",
-            # Важно: сохраняем с расширением исходника, FFmpeg потом сделает mp3
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             'nocheckcertificate': True, 
-            'socket_timeout': 15, 
-            'retries': 3,
+            'socket_timeout': 30, # Увеличили таймаут
+            'retries': 5,
             'ignoreerrors': True, 
             'fragment_retries': 10,
-            'source_address': '0.0.0.0',
-            # КОНВЕРТАЦИЯ В MP3
+            
+            # УБРАЛИ source_address, так как он может мешать в контейнерах
+            # 'source_address': '0.0.0.0',
+            
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -64,7 +67,7 @@ class YouTubeDownloader:
             }],
         }
         if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
-        logger.info("YouTubeDownloader initialized (MP3 Mode)")
+        logger.info("YouTubeDownloader initialized (Verbose MP3 Mode)")
 
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
@@ -96,7 +99,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v16:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v17:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
 
@@ -196,6 +199,7 @@ class YouTubeDownloader:
             loop = asyncio.get_running_loop()
             def do_download():
                 try:
+                    # ВАЖНО: Тут логи будут выведены в stdout из-за verbose=True
                     with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                         ydl.download([video_id])
                     return True
@@ -218,7 +222,7 @@ class YouTubeDownloader:
         if exact_path.exists() and exact_path.stat().st_size > 1024: return exact_path
         return None
 
-    async def wait_for_download_completion(self, video_id: str, timeout: int = 120) -> Optional[Path]:
+    async def wait_for_download_completion(self, video_id: str, timeout: int = 45) -> Optional[Path]:
         start_time = time.time()
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         while time.time() - start_time < timeout:
