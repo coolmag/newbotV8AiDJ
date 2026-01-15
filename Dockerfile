@@ -1,23 +1,22 @@
+# Используем легкий образ Python 3.11
 FROM python:3.11-slim
 
+# 1. Установка системных зависимостей
+# ffmpeg - для аудио
+# nodejs - для подписи YouTube (ОБЯЗАТЕЛЬНО)
+RUN apt-get update && \
+    apt-get install -y ffmpeg nodejs npm && \
+    rm -rf /var/lib/apt/lists/*
+
+# Настройка рабочей директории
 WORKDIR /app
 
-# Устанавливаем FFmpeg и другие зависимости
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    nodejs \
-    npm \
-    && rm -rf /var/lib/apt/lists/*
-
-# Копируем requirements и устанавливаем зависимости
+# 2. Установка Python-библиотек
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем код
+# 3. Копирование всего кода проекта
 COPY . .
 
-# Создаём директории
-RUN mkdir -p downloads temp_audio
-
-# Запуск
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# 4. Команда запуска (использует порт Railway)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
