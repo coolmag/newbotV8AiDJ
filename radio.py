@@ -97,7 +97,7 @@ class RadioSession:
         # Базовый запрос
         base_query = retry_query or self.query
         
-        # Генерируем вариации запроса, чтобы обойти кэш и найти новые треки
+        # Генерируем вариации запроса
         variations = [
             base_query,
             f"{base_query} mix",
@@ -107,11 +107,11 @@ class RadioSession:
             f"{base_query} hits"
         ]
         
-        # Перемешиваем вариации, чтобы каждый раз искать по-разному
         if len(self.played_ids) > 10:
             random.shuffle(variations)
 
         found_new = False
+        search_error = False # Флаг ошибки сети
         
         for q in variations:
             if not self.is_running: break
@@ -120,20 +120,47 @@ class RadioSession:
             
             try:
                 tracks = await self.downloader.search(q, decade=self.decade, limit=30)
+                
+                # Если вернулся пустой список, возможно YouTube заблочил нас или ничего нет
+                if not tracks:
+                    continue
+
                 new_tracks = [t for t in tracks if t.identifier not in self.played_ids]
                 
                 if new_tracks:
-                    # Если нашли новые треки - добавляем и выходим
                     random.shuffle(new_tracks)
                     self.playlist.extend(new_tracks)
-                    logger.info(f"[{self.chat_id}] Найдено {len(new_tracks)} новых треков по запросу '{q}'")
+                    logger.info(f"[{self.chat_id}] Найдено {len(new_tracks)} новых треков.")
                     found_new = True
                     break
             except Exception as e:
                 logger.error(f"Search error for {q}: {e}")
+                search_error = True # Запоминаем, что была ошибка
         
+        # === АВТОНОМНЫЙ РЕЖИМ (FALLBACK) ===
         if not found_new:
-            logger.warning(f"[{self.chat_id}] Исчерпаны треки для '{base_query}'.")
+            logger.warning(f"[{self.chat_id}] Не удалось найти новые треки в интернете.")
+            
+            # Если были ошибки сети или просто ничего не нашлось — достаем из кэша
+            if search_error or not self.playlist:
+                await self._update_status("📡 Сбой связи с YouTube. Перехожу в *автономный режим* (архив).")
+                
+                cached_tracks = await self.downloader.get_random_cached_tracks(limit=10)
+                
+                # Фильтруем то, что только что играло (чтобы не повторять одно и то же по кругу)
+                valid_cached = [t for t in cached_tracks if t.identifier not in self.played_ids]
+                
+                # Если в кэше пусто или все уже прослушано — сбрасываем историю и берем всё
+                if not valid_cached and cached_tracks:
+                    self.played_ids.clear()
+                    valid_cached = cached_tracks
+
+                if valid_cached:
+                    random.shuffle(valid_cached)
+                    self.playlist.extend(valid_cached)
+                    logger.info(f"[{self.chat_id}] Добавлено {len(valid_cached)} треков из кэша.")
+                else:
+                    logger.error(f"[{self.chat_id}] Кэш тоже пуст!")
             
         self._is_searching = False
 

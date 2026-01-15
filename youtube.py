@@ -4,6 +4,7 @@ import logging
 import os
 import glob
 import re
+import random
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -258,3 +259,45 @@ class YouTubeDownloader:
                 if not part_files: return final_path
             await asyncio.sleep(0.5)
         return None
+
+    async def get_random_cached_tracks(self, limit: int = 10) -> List[TrackInfo]:
+        """
+        Возвращает случайные треки, которые уже есть на диске (для офлайн режима).
+        """
+        loop = asyncio.get_running_loop()
+        
+        # 1. Ищем все mp3 файлы
+        # Используем run_in_executor, чтобы не блокировать бота тяжелой операцией ввода-вывода
+        def scan_files():
+            return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
+        
+        files = await loop.run_in_executor(None, scan_files)
+        
+        if not files:
+            return []
+
+        # 2. Перемешиваем и берем с запасом
+        random.shuffle(files)
+        selected_files = files[:limit * 2]
+        
+        tracks = []
+        for file_path in selected_files:
+            if len(tracks) >= limit: break
+            
+            video_id = file_path.stem
+            # Пытаемся достать метаданные из кэша
+            info = await self.get_track_info(video_id)
+            
+            if info:
+                tracks.append(info)
+            else:
+                # Если метаданные потерялись, создаем заглушку, чтобы трек всё равно играл
+                tracks.append(TrackInfo(
+                    identifier=video_id,
+                    title=f"Cached Track {video_id[-4:]}",
+                    artist="Offline Archive",
+                    duration=0,
+                    source=Source.YOUTUBE
+                ))
+                
+        return tracks
