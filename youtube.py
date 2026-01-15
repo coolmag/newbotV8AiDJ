@@ -33,12 +33,14 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(3)
         self.search_semaphore = asyncio.Semaphore(5)
         
-        # Сохраняем куки для поиска, но изолируем от скачивания
+        # ПОДГОТОВКА КУКИ
         cookies_content = os.getenv("COOKIES_CONTENT")
+        cookie_file_path = None
         if cookies_content:
-            with open("cookies.txt", "w", encoding="utf-8") as f:
+            cookie_file_path = "cookies.txt"
+            with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
-            logger.info("🍪 Куки сохранены (для поиска)")
+            logger.info("🍪 Куки загружены и готовы к работе")
 
         self.ydl_opts = {
             "verbose": True,
@@ -60,26 +62,32 @@ class YouTubeDownloader:
             'nocheckcertificate': True, 
             'socket_timeout': 30, 
             'retries': 10,
-            'ignoreerrors': True, 
+            'ignoreerrors': True,
+            'fragment_retries': 10,
             
-            # Принудительный IPv4
-            'source_address': '0.0.0.0', 
+            # Убираем принудительный IPv4, чтобы дать шанс IPv6 (иногда там чище)
+            # 'source_address': '0.0.0.0', 
             
-            # !!! PROTOCOL: TV EMBEDDED !!!
-            # Самый "нежный" клиент, который часто пропускает серверные IP
+            # !!! СТРАТЕГИЯ MOBILE WEB (MWEB) !!!
+            # Используем клиент мобильного браузера.
+            # Он поддерживает Cookies и часто имеет меньше ограничений, чем Desktop Web.
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['tv_embedded', 'web_embedded'],
+                    'player_client': ['mweb', 'web'], # Приоритет Mobile Web
                     'player_skip': ['js', 'configs', 'webpage'],
                 }
             },
             
-            # Отключаем лишние проверки форматов, чтобы брать всё что дают
-            'check_formats': None, 
+            # Добавляем User-Agent от Android Chrome, чтобы соответствовать mweb
+            'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
         }
         
-        # КУКИ ОТКЛЮЧЕНЫ для yt-dlp, чтобы не ломать TV-клиент
-        logger.info("YouTubeDownloader initialized (Protocol: TV Embedded)")
+        # ВКЛЮЧАЕМ КУКИ!
+        # Они необходимы для обхода требования "Sign in".
+        if cookie_file_path: 
+            self.ydl_opts['cookiefile'] = cookie_file_path
+        
+        logger.info("YouTubeDownloader initialized (Protocol: Mobile Web Auth)")
 
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
@@ -109,13 +117,13 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            # v25 - новый ключ кэша для чистого старта
-            cache_key = f"yt_search_v25:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v26:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
             is_russian = any(word in clean_query for word in ['советск', 'русск', 'ссср', 'песни', 'хиты'])
             all_valid_tracks = []
+            
             for suffix in suffixes:
                 actual_query = f"{query}{suffix}"
                 def do_search():
@@ -131,12 +139,14 @@ class YouTubeDownloader:
                 if len(valid) < 3: valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=False)]
                 all_valid_tracks.extend([self._parse_ytmusic_entry(e) for e in valid])
                 if len(all_valid_tracks) >= limit: break
+
             if not all_valid_tracks:
                 def emergency_search():
                     try: return self._ytmusic.search(query, limit=10)
                     except: return []
                 results = await asyncio.get_running_loop().run_in_executor(None, emergency_search)
                 all_valid_tracks = [self._parse_ytmusic_entry(e) for e in results if self._is_track_valid(e, strict=False)]
+
             unique = []
             seen = set()
             for t in all_valid_tracks:
