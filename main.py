@@ -5,6 +5,8 @@ import time
 from datetime import timedelta
 import os
 import json
+import subprocess
+import shutil
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -22,7 +24,6 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager 
 
-# --- ИМПОРТ ИЗ НОВОГО ФАЙЛА (БЕЗОПАСНО) ---
 from gemini_init import HAS_GENAI 
 
 logger = logging.getLogger(__name__)
@@ -30,12 +31,32 @@ _start_time = time.time()
 
 def get_uptime(): return str(timedelta(seconds=int(time.time() - _start_time)))
 
-@asynccontextmanager
+ @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Aurora System Starting...")
     
-    # Log NLP Status
+    # --- ДИАГНОСТИКА ОКРУЖЕНИЯ (НОВОЕ) ---
+    logger.info("🛠 DIAGNOSTIC CHECK:")
+    
+    # 1. Проверка Node.js
+    node_path = shutil.which("node") or shutil.which("nodejs")
+    if node_path:
+        try:
+            v = subprocess.check_output([node_path, "--version"]).decode().strip()
+            logger.info(f"✅ Node.js DETECTED: {v} at {node_path}")
+        except Exception as e:
+            logger.error(f"⚠️ Node.js found but failed: {e}")
+    else:
+        logger.error("❌ Node.js NOT FOUND! YouTube playback will fail.")
+
+    # 2. Проверка FFmpeg
+    if shutil.which("ffmpeg"):
+        logger.info(f"✅ FFmpeg DETECTED")
+    else:
+        logger.error("❌ FFmpeg NOT FOUND!")
+    # --------------------------------------
+
     if HAS_GENAI:
         logger.info("🧠 NLP Engine: ACTIVE (Gemini)")
     else:
@@ -98,7 +119,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 # --- ENDPOINTS ---
 
-@app.get("/api/ai/dj")
+ @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     logger.info(f"[AI Web] Prompt: {prompt}")
     intro = await ChatManager.get_response(0, f"Intro for song: {prompt}", "User")
@@ -108,7 +129,7 @@ async def ai_dj_generate(prompt: str, request: Request):
     tracks = await downloader.search(query=prompt, limit=10)
     return {"dj_intro": intro, "playlist": tracks}
 
-@app.get("/audio/{video_id}.mp3")
+ @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
     downloader = request.app.state.downloader
     path = downloader._find_downloaded_file(video_id)
@@ -119,16 +140,16 @@ async def get_audio_file(video_id: str, request: Request):
     if path: return FileResponse(path)
     return JSONResponse(status_code=404, content={"error": "File not found"})
 
-@app.get("/api/health")
+ @app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}
 
-@app.get("/api/player/playlist")
+ @app.get("/api/player/playlist")
 async def get_playlist(query: str, request: Request):
     downloader = request.app.state.downloader
     tracks = await downloader.search(query=query, limit=15)
     return {"playlist": tracks}
 
-@app.post("/telegram")
+ @app.post("/telegram")
 async def telegram_webhook(request: Request):
     tg_app = request.app.state.tg_app
     try:
