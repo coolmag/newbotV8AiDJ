@@ -44,9 +44,8 @@ class YouTubeDownloader:
 
         self.ydl_opts = {
             "quiet": True, "no_warnings": True, "noplaylist": True,
-            "format": "bestaudio/best", "logger": SilentLogger(),
-            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
+            "format": "bestaudio/best",
+            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.m4a"),
             'nocheckcertificate': True, 'socket_timeout': 15, 'retries': 3,
             'ignoreerrors': True, 'fragment_retries': 10,
             'source_address': '0.0.0.0', # Force IPv4 on some systems
