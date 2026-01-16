@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import yt_dlp
 from ytmusicapi import YTMusic
+import httpx
 
 from config import Settings
 from models import DownloadResult, Source, TrackInfo
@@ -18,7 +19,6 @@ from cache_service import CacheService
 
 logger = logging.getLogger(__name__)
 
-# Заглушка, чтобы не мусорить в логах
 class SilentLogger:
     def debug(self, msg: str): pass
     def warning(self, msg: str): pass
@@ -32,48 +32,130 @@ class YouTubeDownloader:
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         self._ytmusic = YTMusic()
-        self.semaphore = asyncio.Semaphore(2) # Снижаем нагрузку до 2 потоков
+        self.semaphore = asyncio.Semaphore(2)
         self.search_semaphore = asyncio.Semaphore(5)
         
-        # Загружаем куки (ОБЯЗАТЕЛЬНО для Railway)
         cookies_content = os.getenv("COOKIES_CONTENT")
         cookie_file_path = None
         if cookies_content:
             cookie_file_path = "cookies.txt"
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
-            logger.info("🍪 Куки загружены (Режим сопротивления)")
+            logger.info("🍪 Куки загружены (Стратегия: Разделение)")
 
         self.ydl_opts = {
             "quiet": True, 
             "no_warnings": True, 
             "noplaylist": True,
-            "format": "bestaudio/best", # Берем лучшее из доступного
+            "format": "bestaudio/best",
             "logger": SilentLogger(),
-            
-            # Конвертируем в MP3
-            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-            
-            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            
-            # --- АНТИ-БЛОК НАСТРОЙКИ ---
             'nocheckcertificate': True, 
-            'socket_timeout': 60,       # Ждем дольше
-            'retries': 20,              # Пытаемся чаще
-            'fragment_retries': 20,
-            'skip_unavailable_fragments': True, # Если кусок битый - пропускаем, но качаем остальное
-            
-            # Притворяемся старым добрым десктопным хромом (с куками это работает лучше всего)
+            'socket_timeout': 60,
+            'retries': 10,
+            'fragment_retries': 10,
             'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            
-            'source_address': '0.0.0.0', # IPv4
+            'source_address': '0.0.0.0',
         }
         
         if cookie_file_path: 
             self.ydl_opts['cookiefile'] = cookie_file_path
             
-        logger.info("YouTubeDownloader initialized (Protocol: Freedom)")
+        logger.info("YouTubeDownloader initialized (Strategy: Split Download)")
 
+    async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
+        async with self.semaphore:
+            if not track_info:
+                track_info = await self.get_track_info(video_id)
+            if not track_info:
+                return DownloadResult(success=False, error_message="Info failed")
+
+            file_id_cache_key = f"file_id:{video_id}"
+            cached_file_id = await self._cache.get(file_id_cache_key)
+            if cached_file_id:
+                return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
+
+            existing_path = self._find_downloaded_file(video_id)
+            if existing_path:
+                return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
+
+            logger.info(f"[Download] Stage 1/3: Getting direct URL for {video_id}")
+            
+            info = None
+            direct_url = None
+            try:
+                loop = asyncio.get_running_loop()
+                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                    info = await loop.run_in_executor(None, lambda: ydl.extract_info(video_id, download=False))
+                
+                best_audio = next((f for f in reversed(info.get('formats', [])) 
+                                   if f.get('acodec') != 'none' and f.get('vcodec') == 'none'), None)
+                if best_audio:
+                    direct_url = best_audio.get('url')
+                
+                if not direct_url:
+                     direct_url = info.get('url')
+
+            except Exception as e:
+                logger.error(f"URL extraction failed for {video_id}: {e}")
+                return DownloadResult(success=False, error_message="URL Extraction Failed", track_info=track_info)
+
+            if not direct_url:
+                logger.error(f"No direct URL found for {video_id}")
+                return DownloadResult(success=False, error_message="No Direct URL", track_info=track_info)
+
+            logger.info(f"[Download] Stage 2/3: Downloading from URL with httpx...")
+
+            temp_file_path = self._settings.DOWNLOADS_DIR / f"{video_id}.temp_download"
+            try:
+                headers = {
+                    'User-Agent': self.ydl_opts.get('user_agent'),
+                    'Referer': f'https://www.youtube.com/'
+                }
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    async with client.stream("GET", direct_url, headers=headers, follow_redirects=True) as response:
+                        response.raise_for_status()
+                        with open(temp_file_path, 'wb') as f:
+                            async for chunk in response.aiter_bytes():
+                                f.write(chunk)
+                
+                if not temp_file_path.exists() or temp_file_path.stat().st_size < 1024:
+                    raise Exception("Downloaded file is empty or too small")
+
+            except Exception as e:
+                logger.error(f"httpx download failed for {video_id}: {e}")
+                if temp_file_path.exists(): os.unlink(temp_file_path)
+                return DownloadResult(success=False, error_message="HTTPX Download Failed", track_info=track_info)
+            
+            logger.info(f"[Download] Stage 3/3: Converting to MP3 with FFmpeg...")
+            final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
+            try:
+                ffmpeg_proc = await asyncio.create_subprocess_exec(
+                    'ffmpeg',
+                    '-i', str(temp_file_path),
+                    '-codec:a', 'libmp3lame',
+                    '-q:a', '2', # ~192kbps
+                    '-y',
+                    str(final_path),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                _, stderr = await ffmpeg_proc.communicate()
+                if ffmpeg_proc.returncode != 0:
+                    raise Exception(f"FFmpeg failed: {stderr.decode()}")
+            except Exception as e:
+                logger.error(f"FFmpeg conversion failed for {video_id}: {e}")
+                return DownloadResult(success=False, error_message="FFmpeg Failed", track_info=track_info)
+            finally:
+                 if temp_file_path.exists(): os.unlink(temp_file_path)
+
+            if not final_path.exists() or final_path.stat().st_size < 1024:
+                logger.error(f"Final file is missing or empty for {video_id}")
+                return DownloadResult(success=False, error_message="File Lost Post-Conversion", track_info=track_info)
+
+            return DownloadResult(success=True, file_path=final_path, track_info=track_info)
+
+    # --- Остальные методы без изменений ---
+            
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
         if not entry: return False
         res_type = entry.get('resultType', '').lower()
@@ -98,7 +180,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v35:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v_split_dl:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -174,38 +256,6 @@ class YouTubeDownloader:
         await self._cache.set(cache_key, track_info, ttl=86400)
         return track_info
 
-    async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
-        async with self.semaphore:
-            if not track_info:
-                track_info = await self.get_track_info(video_id)
-
-            if not track_info: return DownloadResult(success=False, error_message="Info failed")
-            
-            file_id_cache_key = f"file_id:{video_id}"
-            cached_file_id = await self._cache.get(file_id_cache_key)
-            if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
-            
-            existing_path = self._find_downloaded_file(video_id)
-            if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
-            
-            logger.info(f"[Download] Starting: {video_id}")
-            loop = asyncio.get_running_loop()
-            def do_download():
-                try:
-                    with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                        ydl.download([video_id])
-                    return True
-                except Exception as e: 
-                    logger.error(f"Download error {video_id}: {e}")
-                    return False
-            
-            success = await loop.run_in_executor(None, do_download)
-            if not success: return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
-
-            final_path = await self.wait_for_download_completion(video_id)
-            if not final_path: return DownloadResult(success=False, error_message="File lost", track_info=track_info)
-            return DownloadResult(success=True, file_path=final_path, track_info=track_info)
-
     async def cache_file_id(self, video_id: str, file_id: str):
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
@@ -242,5 +292,12 @@ class YouTubeDownloader:
             video_id = file_path.stem
             info = await self.get_track_info(video_id)
             if info: tracks.append(info)
-            else: tracks.append(TrackInfo(identifier=video_id, title=f"Cached {video_id}", artist="Offline", duration=0))
+            else:
+                tracks.append(TrackInfo(
+                    identifier=video_id,
+                    title=f"Cached Track {video_id[-4:]}",
+                    artist="Offline Archive",
+                    duration=0,
+                    source=Source.YOUTUBE
+                ))
         return tracks
