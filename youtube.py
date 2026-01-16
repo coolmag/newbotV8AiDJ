@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import yt_dlp
 from ytmusicapi import YTMusic
-from curl_cffi.aio import AsyncSession
+from curl_cffi.requests import AsyncSession
 
 from config import Settings
 from models import DownloadResult, Source, TrackInfo
