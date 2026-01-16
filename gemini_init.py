@@ -1,130 +1,109 @@
 import os
 import logging
-import time
-from pathlib import Path
+import random
+import asyncio
+from typing import Optional
 from google import genai
 from google.genai import errors
 
-def _get_debug_log_path():
-    """Get path to debug log file, works on both Windows and Linux"""
-    base_dir = Path(__file__).resolve().parent
-    log_path = base_dir / ".cursor" / "debug.log"
-    return str(log_path)
-
 logger = logging.getLogger("gemini")
-HAS_GENAI = False
-client = None
-# Актуальные модели Gemini (обновлено 2025)
-# Будем получать список доступных моделей динамически
-MODELS = []  # Будет заполнен динамически
 
-try:
-    if k := os.getenv("GEMINI_API_KEY"):
-        # #region agent log
-        try:
-            import json
-            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gemini_init.py:12","message":"Gemini init: API key found","data":{"has_key":True,"key_length":len(k)},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
-        client = genai.Client(api_key=k)
-        HAS_GENAI = True
-        # #region agent log
-        try:
-            import json
-            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"gemini_init.py:14","message":"Gemini init: client created","data":{"has_genai":HAS_GENAI,"client_exists":client is not None},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
-    else:
-        # #region agent log
-        try:
-            import json
-            with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gemini_init.py:12","message":"Gemini init: NO API key","data":{"has_key":False},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
-except Exception as e:
-    logger.error(f"[Gemini] Init exception: {e}", exc_info=True)
-    # #region agent log
-    try:
-        import json
-        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"gemini_init.py:15","message":"Gemini init: exception","data":{"error":str(e)[:100]},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: 
-        pass
-    # #endregion
-    pass
+# === ЗАГРУЗКА КЛЮЧЕЙ ===
+def _load_keys():
+    # Читаем список ключей из переменной окружения
+    keys_str = os.getenv("GEMINI_API_KEYS", "")
+    # Разделяем по запятой и чистим от пробелов
+    keys = [k.strip() for k in keys_str.split(",") if k.strip()]
+    
+    # Если списка нет, пробуем старую переменную с одним ключом
+    if not keys:
+        single = os.getenv("GEMINI_API_KEY", "")
+        if single:
+            keys.append(single.strip())
+            
+    return keys
 
-def generate_smart(prompt: str) -> str:
-    logger.info(f"[Gemini] generate_smart called, HAS_GENAI={HAS_GENAI}, client_exists={client is not None}")
-    if not HAS_GENAI or not client:
+KEYS = _load_keys()
+HAS_GENAI = len(KEYS) > 0
+
+if HAS_GENAI:
+    logger.info(f"[Gemini] System active. Loaded {len(KEYS)} API keys. Rotation enabled.")
+else:
+    logger.warning("[Gemini] No API keys found. Gemini disabled.")
+
+# === СТРАТЕГИЯ ВЫБОРА МОДЕЛИ ===
+# Используем только проверенные модели с высокими лимитами (Tier 1).
+# Избегаем Experimental моделей (у которых 20-50 запросов в день).
+MODELS_PRIORITY = [
+    "gemini-1.5-flash",  # Основная: Быстрая, 1500 req/day
+    "gemini-2.0-flash",  # Резерв 1: Новее, но может быть нестабильна
+    "gemini-1.5-pro"     # Резерв 2: Мощная, но медленная
+]
+
+# Кэш клиентов, чтобы не пересоздавать объекты
+client_cache = {}
+
+def get_client(api_key: str):
+    if api_key not in client_cache:
+        client_cache[api_key] = genai.Client(api_key=api_key)
+    return client_cache[api_key]
+
+def generate_smart(prompt: str) -> Optional[str]:
+    """
+    Генерирует ответ, перебирая ключи и модели до успеха.
+    """
+    if not HAS_GENAI:
         return None
 
-    # --- Упрощенная логика выбора модели ---
-    best_model_name = None
-    # Приоритетный список стабильных и бесплатных моделей
-    PREFERRED_MODELS = [
-        "gemini-1.5-flash", 
-        "gemini-2.0-flash", 
-        "gemini-flash-latest" 
-    ]
+    # 1. Перемешиваем ключи (балансировка нагрузки)
+    current_keys = list(KEYS)
+    random.shuffle(current_keys)
 
-    try:
-        available_models = {m.name.replace('models/', ''): m for m in client.models.list()}
+    for api_key in current_keys:
+        client = get_client(api_key)
+        # Маскируем ключ для логов (показываем только последние 4 символа)
+        key_id = f"...{api_key[-4:]}" if len(api_key) > 4 else "???"
         
-        for preferred in PREFERRED_MODELS:
-            if preferred in available_models:
-                best_model_name = preferred
-                logger.info(f"[Gemini] Selected best model: {best_model_name}")
-                break
-        
-        if not best_model_name:
-            # Если ни одна из предпочитаемых моделей не найдена, попробуем найти любую flash модель
-            for name in available_models.keys():
-                if 'flash' in name and 'embedding' not in name and 'gecko' not in name:
-                    best_model_name = name
-                    logger.info(f"[Gemini] Found fallback flash model: {best_model_name}")
+        # 2. Перебираем модели для текущего ключа
+        for model_name in MODELS_PRIORITY:
+            try:
+                # logger.debug(f"[Gemini] Trying {key_id} with {model_name}")
+                
+                response = client.models.generate_content(
+                    model=model_name, 
+                    contents=prompt
+                )
+                
+                result = None
+                if hasattr(response, 'text') and response.text:
+                    result = response.text.strip()
+                
+                if result:
+                    # Успех! Возвращаем результат сразу.
+                    return result
+                    
+            except errors.ClientError as e:
+                error_str = str(e)
+                
+                # Сценарий 1: Лимит исчерпан (429).
+                # Решение: Бросаем этот ключ, выходим из цикла моделей, берем СЛЕДУЮЩИЙ КЛЮЧ.
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    logger.warning(f"[Gemini] Rate Limit on key {key_id}. Switching key...")
+                    break 
+                
+                # Сценарий 2: Модель не найдена (404).
+                # Решение: Пробуем следующую МОДЕЛЬ на этом же ключе.
+                if "404" in error_str or "Not Found" in error_str:
+                    logger.warning(f"[Gemini] Model {model_name} unavailable on key {key_id}. Trying next model...")
+                    continue
+                
+                # Сценарий 3: Другая ошибка API (например, фильтр безопасности).
+                logger.error(f"[Gemini] API Error {key_id} / {model_name}: {e}")
                     break
+                
+            except Exception as e:
+                logger.error(f"[Gemini] Critical error: {e}")
+                break
 
-        if not best_model_name:
-            logger.error("[Gemini] No suitable flash models found!")
-            return None
-            
-    except Exception as e:
-        logger.error(f"[Gemini] Could not list or select models: {e}", exc_info=True)
-        return None
-
-    # --- Упрощенная логика запроса ---
-    try:
-        logger.info(f"[Gemini] Trying model: {best_model_name}")
-        response = client.models.generate_content(model=best_model_name, contents=prompt)
-        
-        result = None
-        if hasattr(response, 'text') and response.text:
-            result = response.text.strip()
-        elif hasattr(response, 'candidates') and response.candidates:
-            part = response.candidates[0].content.parts[0]
-            if hasattr(part, 'text'):
-                result = part.text.strip()
-
-        if result:
-            logger.info(f"[Gemini] Model {best_model_name} succeeded, result length: {len(result)}")
-            return result
-        else:
-            logger.warning(f"[Gemini] Could not extract valid text from response.")
-            return None
-            
-    except errors.ClientError as e:
-        error_str = str(e)
-        if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
-            # **Ключевое изменение:** Немедленный выход при лимите, без повторов и ожиданий.
-            logger.warning(f"[Gemini] Rate limit (429) for model {best_model_name}. Failing fast.")
-            return None
-        else:
-            logger.error(f"[Gemini] ClientError for {best_model_name}: {e}")
-            return None
-            
-    except Exception as e:
-        logger.error(f"[Gemini] Model {best_model_name} failed: {e}", exc_info=True)
-        return None
+    logger.error("[Gemini] Failed to generate response after trying all keys and models.")
+    return None
