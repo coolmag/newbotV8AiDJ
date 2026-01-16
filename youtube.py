@@ -5,7 +5,6 @@ import os
 import glob
 import re
 import time
-import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -48,22 +47,39 @@ class YouTubeDownloader:
             "noplaylist": True,
             "format": "bestaudio/best", 
             "logger": SilentLogger(),
-            "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            'nocheckcertificate': True, 
             
-            # --- УЛУЧШЕНИЯ СТАБИЛЬНОСТИ ---
-            'socket_timeout': 15, 
-            'retries': 3,
+            "postprocessors": [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            
+            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
+            
+            # --- BYPASS CONFIGURATION 2026 ---
+            'nocheckcertificate': True, 
+            'socket_timeout': 30, 
+            'retries': 10,
             'ignoreerrors': True, 
             'fragment_retries': 10,
+            
+            # 1. Принудительный IPv4 (стабильность на Railway)
             'source_address': '0.0.0.0', 
+            
+            # 2. Использование API Android Creator (YouTube Studio)
+            # Этот клиент часто имеет "иммунитет" к блокировкам дата-центров
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android_creator', 'android', 'web'],
+                    'player_skip': ['js', 'configs', 'webpage'],
+                }
+            },
         }
         
         if cookie_file_path: 
             self.ydl_opts['cookiefile'] = cookie_file_path
             
-        logger.info("YouTubeDownloader initialized (User Config Original)")
+        logger.info("YouTubeDownloader initialized (Protocol: Android Creator)")
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
         if not entry: return False
@@ -89,7 +105,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v31:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v33:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -165,7 +181,6 @@ class YouTubeDownloader:
         await self._cache.set(cache_key, track_info, ttl=86400)
         return track_info
 
-    # !!! АРГУМЕНТ track_info ВОССТАНОВЛЕН !!!
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
             if not track_info:
@@ -199,7 +214,6 @@ class YouTubeDownloader:
     async def cache_file_id(self, video_id: str, file_id: str):
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
-    # Оставлен для совместимости
     async def invalidate_cache(self, video_id: str):
         logger.info(f"[Cache] Invalidating file_id for {video_id}")
         await self._cache.delete(f"file_id:{video_id}")
