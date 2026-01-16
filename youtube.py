@@ -67,7 +67,7 @@ class YouTubeDownloader:
             logger.info(f"Using proxy: {proxy}")
         return opts
 
-    async def _execute_yt_dlp(self, video_id: str, download: bool = True, max_retries: int = 5):
+    async def _execute_yt_dlp(self, video_id: str, download: bool = True, max_retries: int = 20):
         for i in range(max_retries):
             opts = self._get_ydl_opts()
             try:
