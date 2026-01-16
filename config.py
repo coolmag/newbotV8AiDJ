@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     PROXY_URL: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     
+    # --- VK Music Engine (Railway-friendly) ---
+    VK_LOGIN: Optional[str] = None
+    VK_PASSWORD: Optional[str] = None
+    
     # --- Явное объявление полей ---
     ADMIN_ID_LIST: List[int] = []
     

@@ -2,11 +2,11 @@ fastapi
 uvicorn[standard]
 python-telegram-bot
 google-genai==1.57.0
-yt-dlp[default]>=2025.1.12
 aiosqlite
 pydantic
 pydantic-settings
+httpx
 psutil
 nest-asyncio
-ytmusicapi
-curl_cffi
+vk_api>=11.9.9
+beautifulsoup4

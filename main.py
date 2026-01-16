@@ -23,8 +23,6 @@ from youtube import YouTubeDownloader
 from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager 
-from proxy_manager import ProxyManager
-from pathlib import Path
 
 from gemini_init import HAS_GENAI 
 
@@ -73,8 +71,7 @@ async def lifespan(app: FastAPI):
     cache = CacheService(settings.CACHE_DB_PATH)
     await cache.initialize()
     
-    proxy_manager = ProxyManager(project_root=Path(__file__).parent)
-    downloader = YouTubeDownloader(settings, cache, proxy_manager)
+    downloader = YouTubeDownloader(settings, cache)
     app.state.downloader = downloader
     
     # Build Telegram App
