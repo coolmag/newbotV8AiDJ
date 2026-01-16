@@ -53,22 +53,17 @@ class YouTubeDownloader:
             'nocheckcertificate': True, 
             
             # --- УЛУЧШЕНИЯ СТАБИЛЬНОСТИ ---
-            'socket_timeout': 60,       # Увеличен тайм-аут ожидания
-            'retries': 10,              # Больше попыток при срыве
+            'socket_timeout': 15, 
+            'retries': 3,
             'ignoreerrors': True, 
             'fragment_retries': 10,
-            
-            # Ключевое исправление ошибки "Did not get any data blocks":
-            # Скачивание чанками по 10 МБ держит соединение живым.
-            'http_chunk_size': 10485760, 
-            
-            'source_address': '0.0.0.0', # IPv4 (как в вашем коде)
+            'source_address': '0.0.0.0', 
         }
         
         if cookie_file_path: 
             self.ydl_opts['cookiefile'] = cookie_file_path
             
-        logger.info("YouTubeDownloader initialized (Stable Chunked Mode)")
+        logger.info("YouTubeDownloader initialized (User Config Original)")
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
         if not entry: return False
