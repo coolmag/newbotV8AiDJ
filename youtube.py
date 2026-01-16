@@ -41,7 +41,7 @@ class YouTubeDownloader:
             cookie_file_path = "cookies.txt"
             with open(cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
-            logger.info("🍪 Куки загружены (Стратегия: Разделение)")
+            logger.info("🍪 Куки загружены (Стратегия: Проброс заголовков)")
 
         self.ydl_opts = {
             "quiet": True, 
@@ -53,14 +53,13 @@ class YouTubeDownloader:
             'socket_timeout': 60,
             'retries': 10,
             'fragment_retries': 10,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'source_address': '0.0.0.0',
         }
         
         if cookie_file_path: 
             self.ydl_opts['cookiefile'] = cookie_file_path
             
-        logger.info("YouTubeDownloader initialized (Strategy: Split Download)")
+        logger.info("YouTubeDownloader initialized (Strategy: Header Forwarding)")
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
@@ -82,6 +81,7 @@ class YouTubeDownloader:
             
             info = None
             direct_url = None
+            http_headers = None
             try:
                 loop = asyncio.get_running_loop()
                 with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
@@ -89,30 +89,29 @@ class YouTubeDownloader:
                 
                 best_audio = next((f for f in reversed(info.get('formats', [])) 
                                    if f.get('acodec') != 'none' and f.get('vcodec') == 'none'), None)
+                
                 if best_audio:
                     direct_url = best_audio.get('url')
-                
-                if not direct_url:
+                    http_headers = best_audio.get('http_headers')
+                else: # Fallback
                      direct_url = info.get('url')
+                     http_headers = info.get('http_headers')
 
             except Exception as e:
                 logger.error(f"URL extraction failed for {video_id}: {e}")
                 return DownloadResult(success=False, error_message="URL Extraction Failed", track_info=track_info)
 
-            if not direct_url:
-                logger.error(f"No direct URL found for {video_id}")
-                return DownloadResult(success=False, error_message="No Direct URL", track_info=track_info)
+            if not direct_url or not http_headers:
+                logger.error(f"No direct URL or headers found for {video_id}")
+                return DownloadResult(success=False, error_message="No Direct URL/Headers", track_info=track_info)
 
             logger.info(f"[Download] Stage 2/3: Downloading from URL with httpx...")
 
             temp_file_path = self._settings.DOWNLOADS_DIR / f"{video_id}.temp_download"
             try:
-                headers = {
-                    'User-Agent': self.ydl_opts.get('user_agent'),
-                    'Referer': f'https://www.youtube.com/'
-                }
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    async with client.stream("GET", direct_url, headers=headers, follow_redirects=True) as response:
+                # Используем заголовки, полученные от yt-dlp
+                async with httpx.AsyncClient(timeout=60.0, http2=True) as client:
+                    async with client.stream("GET", direct_url, headers=http_headers, follow_redirects=True) as response:
                         response.raise_for_status()
                         with open(temp_file_path, 'wb') as f:
                             async for chunk in response.aiter_bytes():
@@ -133,7 +132,7 @@ class YouTubeDownloader:
                     'ffmpeg',
                     '-i', str(temp_file_path),
                     '-codec:a', 'libmp3lame',
-                    '-q:a', '2', # ~192kbps
+                    '-q:a', '2', # ~192kbps VBR
                     '-y',
                     str(final_path),
                     stdout=asyncio.subprocess.DEVNULL,
@@ -141,7 +140,12 @@ class YouTubeDownloader:
                 )
                 _, stderr = await ffmpeg_proc.communicate()
                 if ffmpeg_proc.returncode != 0:
-                    raise Exception(f"FFmpeg failed: {stderr.decode()}")
+                    # Попытка определить, был ли файл просто скопирован (если исходник уже был mp3)
+                    if "Invalid data found when processing input" in stderr.decode():
+                         raise Exception(f"FFmpeg failed: Invalid data in source file. {stderr.decode()}")
+                    else: # Другая ошибка ffmpeg
+                         raise Exception(f"FFmpeg failed: {stderr.decode()}")
+
             except Exception as e:
                 logger.error(f"FFmpeg conversion failed for {video_id}: {e}")
                 return DownloadResult(success=False, error_message="FFmpeg Failed", track_info=track_info)
@@ -180,7 +184,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v_split_dl:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v_header_fwd:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -268,12 +272,12 @@ class YouTubeDownloader:
         return None
 
     async def wait_for_download_completion(self, video_id: str, timeout: int = 45) -> Optional[Path]:
+        # Этот метод больше не нужен при ручной конвертации, но оставим на всякий случай
         start_time = time.time()
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         while time.time() - start_time < timeout:
             if final_path.exists() and final_path.stat().st_size > 1024:
-                part_files = glob.glob(str(self._settings.DOWNLOADS_DIR / f"{video_id}.*.part"))
-                if not part_files: return final_path
+                return final_path
             await asyncio.sleep(0.5)
         return None
 
