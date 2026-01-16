@@ -110,7 +110,7 @@ class YouTubeDownloader:
             temp_file_path = self._settings.DOWNLOADS_DIR / f"{video_id}.temp_download"
             try:
                 async with AsyncSession(impersonate="chrome110") as session:
-                    response = await session.get(direct_url, headers=http_headers, timeout=60, follow_redirects=True)
+                    response = await session.get(direct_url, headers=http_headers, timeout=60)
                     response.raise_for_status()
                     
                     with open(temp_file_path, 'wb') as f:
