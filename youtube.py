@@ -33,6 +33,8 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(3)
         self.search_semaphore = asyncio.Semaphore(5)
         
+        # Куки нужны для поиска, но для скачивания через iOS могут мешать, если они "грязные".
+        # Но мы рискнем их включить, так как без них с сервера вообще ничего не дают.
         cookies_content = os.getenv("COOKIES_CONTENT")
         cookie_file_path = None
         if cookies_content:
@@ -56,21 +58,21 @@ class YouTubeDownloader:
             
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             
-            # --- BYPASS CONFIGURATION 2026 ---
             'nocheckcertificate': True, 
             'socket_timeout': 30, 
             'retries': 10,
             'ignoreerrors': True, 
             'fragment_retries': 10,
             
-            # 1. Принудительный IPv4 (стабильность на Railway)
+            # Принудительный IPv4
             'source_address': '0.0.0.0', 
             
-            # 2. Использование API Android Creator (YouTube Studio)
-            # Этот клиент часто имеет "иммунитет" к блокировкам дата-центров
+            # !!! PROTOCOL: IOS NATIVE !!!
+            # Клиент iOS часто лучше проходит проверки, чем Android.
+            # Мы используем его в приоритете.
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_creator', 'android', 'web'],
+                    'player_client': ['ios', 'web'],
                     'player_skip': ['js', 'configs', 'webpage'],
                 }
             },
@@ -79,7 +81,7 @@ class YouTubeDownloader:
         if cookie_file_path: 
             self.ydl_opts['cookiefile'] = cookie_file_path
             
-        logger.info("YouTubeDownloader initialized (Protocol: Android Creator)")
+        logger.info("YouTubeDownloader initialized (Protocol: iOS Native)")
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
         if not entry: return False
@@ -105,7 +107,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v33:{clean_query}:{search_mode}" 
+            cache_key = f"yt_search_v34:{clean_query}:{search_mode}" 
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -183,9 +185,7 @@ class YouTubeDownloader:
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         async with self.semaphore:
-            if not track_info:
-                track_info = await self.get_track_info(video_id)
-
+            if not track_info: track_info = await self.get_track_info(video_id)
             if not track_info: return DownloadResult(success=False, error_message="Info failed")
             
             file_id_cache_key = f"file_id:{video_id}"

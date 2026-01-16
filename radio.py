@@ -1,250 +1,235 @@
-from __future__ import annotations
 import asyncio
 import logging
+import random
 import os
-import glob
-import re
-import time
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional, Dict, Set
+from dataclasses import dataclass, field
 
-import yt_dlp
-from ytmusicapi import YTMusic
+from telegram import Bot, Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from telegram.constants import ParseMode, ChatType
+from telegram.error import BadRequest, RetryAfter, Forbidden
 
 from config import Settings
-from models import DownloadResult, Source, TrackInfo
-from cache_service import CacheService
+from models import TrackInfo, DownloadResult
+from youtube import YouTubeDownloader
 
-logger = logging.getLogger(__name__)
+import json
+from pathlib import Path
 
-class SilentLogger:
-    def debug(self, msg: str): pass
-    def warning(self, msg: str): pass
-    def error(self, msg: str): logger.error(f"[yt-dlp] {msg}")
+# Load MUSIC_CATALOG from genres.json
+with open(Path(__file__).parent / "genres.json", "r", encoding="utf-8") as f:
+    MUSIC_CATALOG = json.load(f)
 
-class YouTubeDownloader:
-    FORBIDDEN_WORDS = ['tutorial', 'making of', 'lesson', 'course', 'podcast', 'backing track', 'karaoke']
+logger = logging.getLogger("radio")
 
-    def __init__(self, settings: Settings, cache_service: CacheService):
-        self._settings = settings
-        self._cache = cache_service
-        self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
-        self._ytmusic = YTMusic()
-        self.semaphore = asyncio.Semaphore(3)
-        self.search_semaphore = asyncio.Semaphore(5)
-        
-        # Куки нужны для поиска, но для скачивания через iOS могут мешать, если они "грязные".
-        # Но мы рискнем их включить, так как без них с сервера вообще ничего не дают.
-        cookies_content = os.getenv("COOKIES_CONTENT")
-        cookie_file_path = None
-        if cookies_content:
-            cookie_file_path = "cookies.txt"
-            with open(cookie_file_path, "w", encoding="utf-8") as f:
-                f.write(cookies_content)
-            logger.info("🍪 Куки успешно загружены!")
+def format_duration(seconds: int) -> str:
+    mins, secs = divmod(seconds, 60)
+    return f"{mins}:{secs:02d}"
 
-        self.ydl_opts = {
-            "quiet": True, 
-            "no_warnings": True, 
-            "noplaylist": True,
-            "format": "bestaudio/best", 
-            "logger": SilentLogger(),
+def get_now_playing_message(track: TrackInfo, genre_name: str) -> str:
+    icon = random.choice(["🎧", "🎵", "🎶", "📻", "💿"])
+    title = track.title[:40].strip()
+    artist = track.artist[:30].strip()
+    return f"{icon} *{title}*\n👤 {artist}\n⏱ {format_duration(track.duration)} | 📻 _{genre_name}_"
+
+@dataclass
+class RadioSession:
+    chat_id: int
+    bot: Bot
+    downloader: YouTubeDownloader
+    settings: Settings
+    query: str
+    display_name: str
+    chat_type: Optional[str] = None
+    decade: Optional[str] = None
+    
+    is_running: bool = field(init=False, default=False)
+    playlist: List[TrackInfo] = field(default_factory=list)
+    played_ids: Set[str] = field(default_factory=set)
+    current_task: Optional[asyncio.Task] = None
+    skip_event: asyncio.Event = field(default_factory=asyncio.Event)
+    status_message: Optional[Message] = None
+    _is_searching: bool = field(init=False, default=False)
+    
+    async def start(self):
+        if self.is_running: return
+        self.is_running = True
+        self.current_task = asyncio.create_task(self._radio_loop())
+        logger.info(f"[{self.chat_id}] 🚀 Эфир запущен: '{self.query}'")
+
+    async def stop(self):
+        self.is_running = False
+        if self.current_task: self.current_task.cancel()
+        await self._delete_status()
+        logger.info(f"[{self.chat_id}] 🛑 Эфир остановлен.")
+
+    async def skip(self):
+        self.skip_event.set()
+
+    async def _handle_forbidden(self):
+        logger.error(f"[{self.chat_id}] ⛔️ Бот заблокирован. Стоп.")
+        self.is_running = False
+        self.skip_event.set()
+
+    async def _update_status(self, text: str):
+        if not self.is_running: return
+        try:
+            if self.status_message:
+                try: await self.status_message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+                except BadRequest: self.status_message = None
             
-            "postprocessors": [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            
-            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            
-            'nocheckcertificate': True, 
-            'socket_timeout': 30, 
-            'retries': 10,
-            'ignoreerrors': True, 
-            'fragment_retries': 10,
-            
-            # Принудительный IPv4
-            'source_address': '0.0.0.0', 
-            
-            # !!! PROTOCOL: IOS NATIVE !!!
-            # Клиент iOS часто лучше проходит проверки, чем Android.
-            # Мы используем его в приоритете.
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['ios', 'web'],
-                    'player_skip': ['js', 'configs', 'webpage'],
-                }
-            },
-        }
-        
-        if cookie_file_path: 
-            self.ydl_opts['cookiefile'] = cookie_file_path
-            
-        logger.info("YouTubeDownloader initialized (Protocol: iOS Native)")
+            self.status_message = await self.bot.send_message(self.chat_id, text, parse_mode=ParseMode.MARKDOWN)
+        except Forbidden: await self._handle_forbidden()
+        except Exception: self.status_message = None
 
-    def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
-        if not entry: return False
-        res_type = entry.get('resultType', '').lower()
-        if res_type and res_type not in ['song', 'video']: return False
-        title = str(entry.get('title', '')).lower()
-        if any(word in title for word in self.FORBIDDEN_WORDS): return False
-        try: duration_sec = int(entry.get('duration_seconds', 0))
-        except (ValueError, TypeError): duration_sec = 0
-        if strict:
-            if not (45 < duration_sec < 900): return False
-        else:
-            if duration_sec > 0 and duration_sec < 20: return False
-        if is_russian_query:
-            artist_list = entry.get('artists', [])
-            artist_name = ""
-            if isinstance(artist_list, list) and artist_list: artist_name = artist_list[0].get('name', '')
-            check_str = (title + str(artist_name)).lower()
-            if not bool(re.search('[а-яА-ЯёЁ]', check_str)):
-                if strict: return False
-        return True
-
-    async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
-        async with self.search_semaphore:
-            clean_query = query.lower().strip()
-            cache_key = f"yt_search_v34:{clean_query}:{search_mode}" 
-            cached = await self._cache.get(cache_key)
-            if cached: return cached
-            suffixes = ["", " music", " official audio"]
-            is_russian = any(word in clean_query for word in ['советск', 'русск', 'ссср', 'песни', 'хиты'])
-            all_valid_tracks = []
-            
-            for suffix in suffixes:
-                actual_query = f"{query}{suffix}"
-                def do_search():
-                    try: 
-                        res = self._ytmusic.search(actual_query, filter="songs", limit=limit+5)
-                        if not res: res = self._ytmusic.search(actual_query, filter="videos", limit=limit+5)
-                        return res
-                    except Exception as e: 
-                        logger.warning(f"YTMusic search error: {e}")
-                        return []
-                results = await asyncio.get_running_loop().run_in_executor(None, do_search)
-                valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=True)]
-                if len(valid) < 3: valid = [e for e in results if self._is_track_valid(e, decade, is_russian, strict=False)]
-                all_valid_tracks.extend([self._parse_ytmusic_entry(e) for e in valid])
-                if len(all_valid_tracks) >= limit: break
-
-            if not all_valid_tracks:
-                def emergency_search():
-                    try: return self._ytmusic.search(query, limit=10)
-                    except: return []
-                results = await asyncio.get_running_loop().run_in_executor(None, emergency_search)
-                all_valid_tracks = [self._parse_ytmusic_entry(e) for e in results if self._is_track_valid(e, strict=False)]
-
-            unique = []
-            seen = set()
-            for t in all_valid_tracks:
-                if t.identifier and t.identifier not in seen:
-                    unique.append(t)
-                    seen.add(t.identifier)
-            final = unique[:limit]
-            if final: await self._cache.set(cache_key, final, ttl=3600)
-            return final
-
-    def _parse_ytmusic_entry(self, entry: Dict) -> TrackInfo:
-        artists_raw = entry.get('artists', [])
-        if isinstance(artists_raw, list): artists = ", ".join([str(a.get('name', '')) for a in artists_raw if a.get('name')])
-        else: artists = str(artists_raw)
-        title = str(entry.get('title', 'Unknown Track'))
-        if (not artists or artists == "Unknown Artist") and " - " in title:
-            try:
-                parts = title.split(" - ", 1)
-                artists = parts[0].strip()
-                title = parts[1].strip()
+    async def _delete_status(self):
+        if self.status_message:
+            try: await self.status_message.delete()
             except: pass
-        try: dur = int(entry.get('duration_seconds', 0))
-        except: dur = 0
-        thumbs = entry.get('thumbnails', [])
-        thumb_url = thumbs[-1]['url'] if thumbs and isinstance(thumbs, list) else None
-        return TrackInfo(
-            identifier=str(entry.get('videoId', '')), 
-            title=title, artist=artists or "Unknown Artist", duration=dur, source=Source.YOUTUBE, thumbnail_url=thumb_url
-        )
+            self.status_message = None
 
-    async def get_track_info(self, video_id: str) -> Optional[TrackInfo]:
-        cache_key = f"track_info:{video_id}"
-        cached_info = await self._cache.get(cache_key)
-        if cached_info: return cached_info
-        loop = asyncio.get_running_loop()
-        def do_extract_info():
+    async def _fill_playlist(self, retry_query: str = None):
+        if self._is_searching or not self.is_running: return
+        self._is_searching = True
+        
+        base_query = retry_query or self.query
+        variations = [base_query, f"{base_query} mix", f"{base_query} best songs"]
+        if len(self.played_ids) > 10: random.shuffle(variations)
+        found_new = False
+        
+        for q in variations:
+            if not self.is_running: break
             try:
-                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                    return ydl.extract_info(video_id, download=False)
-            except Exception: return None
-        info = await loop.run_in_executor(None, do_extract_info)
-        if not info: return None
-        track_info = TrackInfo.from_yt_info(info)
-        await self._cache.set(cache_key, track_info, ttl=86400)
-        return track_info
-
-    async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
-        async with self.semaphore:
-            if not track_info: track_info = await self.get_track_info(video_id)
-            if not track_info: return DownloadResult(success=False, error_message="Info failed")
+                tracks = await self.downloader.search(q, decade=self.decade, limit=30)
+                if not tracks: continue
+                new_tracks = [t for t in tracks if t.identifier not in self.played_ids]
+                if new_tracks:
+                    random.shuffle(new_tracks)
+                    self.playlist.extend(new_tracks)
+                    logger.info(f"[{self.chat_id}] Найдено {len(new_tracks)} новых треков.")
+                    found_new = True
+                    break
+            except Exception as e:
+                logger.error(f"Search error for {q}: {e}")
+        
+        if not found_new:
+            if not self.playlist:
+                cached = await self.downloader.get_random_cached_tracks(limit=10)
+                if cached: self.playlist.extend(cached)
             
-            file_id_cache_key = f"file_id:{video_id}"
-            cached_file_id = await self._cache.get(file_id_cache_key)
-            if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
+        self._is_searching = False
+
+    async def _radio_loop(self):
+        while self.is_running:
+            try:
+                if len(self.playlist) < 3: await self._fill_playlist()
+                if not self.playlist:
+                    await self._update_status("📡 Поиск сигнала...")
+                    await asyncio.sleep(5)
+                    continue
+
+                track = self.playlist.pop(0)
+                self.played_ids.add(track.identifier)
+                if len(self.played_ids) > 300: self.played_ids = set(list(self.played_ids)[150:])
+
+                success = await self._play_track(track)
+                
+                if success:
+                    wait_time = min(track.duration, 300) if track.duration > 0 else 180
+                    try: await asyncio.wait_for(self.skip_event.wait(), timeout=wait_time)
+                    except asyncio.TimeoutError: pass 
+                else: await asyncio.sleep(2)
+                
+                self.skip_event.clear()
+            except asyncio.CancelledError: break
+            except Exception as e: logger.error(f"Loop error: {e}"); await asyncio.sleep(5)
+        self.is_running = False
+
+    async def _play_track(self, track: TrackInfo) -> bool:
+        result: Optional[DownloadResult] = None # Инициализация (ФИКС ОШИБКИ)
+        if not self.is_running: return False
+        try:
+            await self._update_status(f"⬇️ Загрузка: *{track.title}*...")
             
-            existing_path = self._find_downloaded_file(video_id)
-            if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
+            result = await self.downloader.download(track.identifier, track_info=track)
             
-            logger.info(f"[Download] Starting: {video_id}")
-            loop = asyncio.get_running_loop()
-            def do_download():
-                try:
-                    with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                        ydl.download([video_id])
-                    return True
-                except Exception as e: 
-                    logger.error(f"Download error {video_id}: {e}")
-                    return False
-            success = await loop.run_in_executor(None, do_download)
-            if not success: return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
-            final_path = await self.wait_for_download_completion(video_id)
-            if not final_path: return DownloadResult(success=False, error_message="File lost", track_info=track_info)
-            return DownloadResult(success=True, file_path=final_path, track_info=track_info)
+            if not result or not result.success: return False
+            
+            caption = get_now_playing_message(track, self.display_name)
+            markup = None
+            base_url = self.settings.BASE_URL.strip() if self.settings.BASE_URL else ""
+            if base_url.startswith("https") and self.chat_type != ChatType.CHANNEL:
+                markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Плеер", url=base_url)]])
 
-    async def cache_file_id(self, video_id: str, file_id: str):
-        await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
+            try:
+                if result.file_id:
+                    await self.bot.send_audio(self.chat_id, audio=result.file_id, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+                elif result.file_path:
+                    with open(result.file_path, 'rb') as f:
+                        msg = await self.bot.send_audio(self.chat_id, audio=f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+                        if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
+            except Forbidden: await self._handle_forbidden(); return False
+            except Exception as e:
+                if result and result.file_id: # Проверка result
+                    await self.downloader.invalidate_cache(track.identifier)
+                    await self._update_status(f"🔄 Перекачиваю: *{track.title}*...")
+                    result = await self.downloader.download(track.identifier, track_info=track)
+                    if result.success and result.file_path:
+                         with open(result.file_path, 'rb') as f:
+                             msg = await self.bot.send_audio(self.chat_id, audio=f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+                             if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
+                         return True
+                return False
+            
+            await self._delete_status()
+            return True
+        except Exception: return False
+        finally:
+            if result and result.file_path and os.path.exists(result.file_path):
+                try: os.unlink(result.file_path)
+                except: pass
 
-    async def invalidate_cache(self, video_id: str):
-        logger.info(f"[Cache] Invalidating file_id for {video_id}")
-        await self._cache.delete(f"file_id:{video_id}")
+class RadioManager:
+    def __init__(self, bot: Bot, settings: Settings, downloader: YouTubeDownloader):
+        self._bot, self._settings, self._downloader = bot, settings, downloader
+        self._sessions: Dict[int, RadioSession] = {}
+        self._locks: Dict[int, asyncio.Lock] = {}
 
-    def _find_downloaded_file(self, video_id: str) -> Optional[Path]:
-        exact_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
-        if exact_path.exists() and exact_path.stat().st_size > 1024: return exact_path
-        return None
+    def _get_lock(self, chat_id: int) -> asyncio.Lock:
+        self._locks.setdefault(chat_id, asyncio.Lock())
+        return self._locks[chat_id]
 
-    async def wait_for_download_completion(self, video_id: str, timeout: int = 45) -> Optional[Path]:
-        start_time = time.time()
-        final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
-        while time.time() - start_time < timeout:
-            if final_path.exists() and final_path.stat().st_size > 1024:
-                part_files = glob.glob(str(self._settings.DOWNLOADS_DIR / f"{video_id}.*.part"))
-                if not part_files: return final_path
-            await asyncio.sleep(0.5)
-        return None
+    async def start(self, chat_id: int, query: str, chat_type: Optional[str] = None, display_name: Optional[str] = None, decade: Optional[str] = None):
+        async with self._get_lock(chat_id):
+            if chat_id in self._sessions: await self._sessions[chat_id].stop()
+            if query == "random": query, decade, display_name = self._get_random_query()
+            
+            session = RadioSession(
+                chat_id=chat_id, bot=self._bot, downloader=self._downloader, 
+                settings=self._settings, query=query, display_name=(display_name or query), 
+                decade=decade, chat_type=chat_type
+            )
+            self._sessions[chat_id] = session
+            await session.start()
 
-    async def get_random_cached_tracks(self, limit: int = 10) -> List[TrackInfo]:
-        loop = asyncio.get_running_loop()
-        def scan_files(): return list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
-        files = await loop.run_in_executor(None, scan_files)
-        if not files: return []
-        random.shuffle(files)
-        selected_files = files[:limit * 2]
-        tracks = []
-        for file_path in selected_files:
-            if len(tracks) >= limit: break
-            video_id = file_path.stem
-            info = await self.get_track_info(video_id)
-            if info: tracks.append(info)
-            else: tracks.append(TrackInfo(identifier=video_id, title=f"Cached {video_id}", artist="Offline", duration=0))
-        return tracks
+    async def stop(self, chat_id: int):
+        async with self._get_lock(chat_id):
+            if session := self._sessions.pop(chat_id, None): await session.stop()
+
+    async def skip(self, chat_id: int):
+        if session := self._sessions.get(chat_id): await session.skip()
+
+    async def stop_all(self):
+        tasks = [self.stop(cid) for cid in list(self._sessions.keys())]
+        if tasks: await asyncio.gather(*tasks)
+
+    def _get_random_query(self) -> tuple[str, Optional[str], str]:
+        all_queries = []
+        def extract(node):
+            for k, v in node.items():
+                if isinstance(v, dict):
+                    if "query" in v: all_queries.append((v["query"], None, v.get("name", k)))
+                    elif "children" in v: extract(v["children"])
+                    else: extract(v)
+        extract(MUSIC_CATALOG)
+        return random.choice(all_queries) if all_queries else ("top hits", None, "Random")
