@@ -99,7 +99,7 @@ def generate_smart(prompt: str) -> Optional[str]:
                 
                 # Сценарий 3: Другая ошибка API (например, фильтр безопасности).
                 logger.error(f"[Gemini] API Error {key_id} / {model_name}: {e}")
-                    break
+                break
                 
             except Exception as e:
                 logger.error(f"[Gemini] Critical error: {e}")
