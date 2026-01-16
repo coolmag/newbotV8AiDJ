@@ -10,17 +10,12 @@ logger = logging.getLogger("gemini")
 
 # === ЗАГРУЗКА КЛЮЧЕЙ ===
 def _load_keys():
-    # Читаем список ключей из переменной окружения
     keys_str = os.getenv("GEMINI_API_KEYS", "")
-    # Разделяем по запятой и чистим от пробелов
     keys = [k.strip() for k in keys_str.split(",") if k.strip()]
-    
-    # Если списка нет, пробуем старую переменную с одним ключом
     if not keys:
         single = os.getenv("GEMINI_API_KEY", "")
         if single:
             keys.append(single.strip())
-            
     return keys
 
 KEYS = _load_keys()
@@ -31,16 +26,20 @@ if HAS_GENAI:
 else:
     logger.warning("[Gemini] No API keys found. Gemini disabled.")
 
-# === СТРАТЕГИЯ ВЫБОРА МОДЕЛИ ===
-# Используем только проверенные модели с высокими лимитами (Tier 1).
-# Избегаем Experimental моделей (у которых 20-50 запросов в день).
+# === СТРАТЕГИЯ ВЫБОРА МОДЕЛИ (JAN 2026 UPDATE) ===
+# На основе предоставленных данных:
+# 2.5 Series - Stable (Основной выбор)
+# 3 Series - Preview (Резерв для сложных задач)
+# 2.0 Series - Deprecated (Удалить после 03.03.2026)
+
 MODELS_PRIORITY = [
-    "gemini-1.5-flash",  # Основная: Быстрая, 1500 req/day
-    "gemini-2.0-flash",  # Резерв 1: Новее, но может быть нестабильна
-    "gemini-1.5-pro"     # Резерв 2: Мощная, но медленная
+    "gemini-2.5-flash",       # STABLE: Быстрая, легкая, RPD ~500
+    "gemini-3-flash",         # PREVIEW: Умная и быстрая
+    "gemini-2.5-pro",         # STABLE: Мощная (контекст 1М)
+    "gemini-2.0-flash",       # LEGACY: Запасной вариант (до марта 2026)
+    "gemini-1.5-flash"        # FALLBACK: Старая рабочая лошадка
 ]
 
-# Кэш клиентов, чтобы не пересоздавать объекты
 client_cache = {}
 
 def get_client(api_key: str):
@@ -50,24 +49,23 @@ def get_client(api_key: str):
 
 def generate_smart(prompt: str) -> Optional[str]:
     """
-    Генерирует ответ, перебирая ключи и модели до успеха.
+    Генерирует ответ, используя ротацию ключей и приоритет моделей 2026 года.
     """
     if not HAS_GENAI:
         return None
 
-    # 1. Перемешиваем ключи (балансировка нагрузки)
+    # Ротация ключей (Load Balancing)
     current_keys = list(KEYS)
     random.shuffle(current_keys)
 
     for api_key in current_keys:
         client = get_client(api_key)
-        # Маскируем ключ для логов (показываем только последние 4 символа)
+        # Скрываем часть ключа для логов
         key_id = f"...{api_key[-4:]}" if len(api_key) > 4 else "???"
         
-        # 2. Перебираем модели для текущего ключа
         for model_name in MODELS_PRIORITY:
             try:
-                # logger.debug(f"[Gemini] Trying {key_id} with {model_name}")
+                # logger.debug(f"[Gemini] Requesting {model_name} via {key_id}")
                 
                 response = client.models.generate_content(
                     model=model_name, 
@@ -79,25 +77,21 @@ def generate_smart(prompt: str) -> Optional[str]:
                     result = response.text.strip()
                 
                 if result:
-                    # Успех! Возвращаем результат сразу.
                     return result
                     
             except errors.ClientError as e:
                 error_str = str(e)
                 
-                # Сценарий 1: Лимит исчерпан (429).
-                # Решение: Бросаем этот ключ, выходим из цикла моделей, берем СЛЕДУЮЩИЙ КЛЮЧ.
+                # Ошибка 429 (Лимит) -> Меняем КЛЮЧ
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    logger.warning(f"[Gemini] Rate Limit on key {key_id}. Switching key...")
+                    logger.warning(f"[Gemini] Rate Limit ({key_id}) on {model_name}. Switching key...")
                     break 
                 
-                # Сценарий 2: Модель не найдена (404).
-                # Решение: Пробуем следующую МОДЕЛЬ на этом же ключе.
+                # Ошибка 404 (Модель не найдена) -> Меняем МОДЕЛЬ (пробуем следующую на этом же ключе)
                 if "404" in error_str or "Not Found" in error_str:
-                    logger.warning(f"[Gemini] Model {model_name} unavailable on key {key_id}. Trying next model...")
+                    # logger.warning(f"[Gemini] Model {model_name} not found on this key. Trying next...")
                     continue
                 
-                # Сценарий 3: Другая ошибка API (например, фильтр безопасности).
                 logger.error(f"[Gemini] API Error {key_id} / {model_name}: {e}")
                 break
                 
@@ -105,5 +99,4 @@ def generate_smart(prompt: str) -> Optional[str]:
                 logger.error(f"[Gemini] Critical error: {e}")
                 break
 
-    logger.error("[Gemini] Failed to generate response after trying all keys and models.")
     return None
