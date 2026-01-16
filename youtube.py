@@ -50,7 +50,7 @@ class YouTubeDownloader:
             "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             'nocheckcertificate': True, 
-            'socket_timeout': 20, # Увеличим таймаут для прокси
+            'socket_timeout': 10, # Уменьшаем таймаут для прокси
             'retries': 2, # Уменьшим, т.к. сами делаем ретраи
         }
         if self.cookie_file_path: 
@@ -71,26 +71,33 @@ class YouTubeDownloader:
         for i in range(max_retries):
             opts = self._get_ydl_opts()
             try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    if download:
-                        # ydl.download() блокирующий, запускаем в executor
-                        await asyncio.get_running_loop().run_in_executor(None, ydl.download, [video_id])
-                    else:
-                        # extract_info тоже блокирующий
-                        info = await asyncio.get_running_loop().run_in_executor(None, ydl.extract_info, video_id, False)
-                        return info
-                return True # Успешное скачивание
+                async def dlp_task():
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        if download:
+                            await asyncio.get_running_loop().run_in_executor(None, ydl.download, [video_id])
+                            return True
+                        else:
+                            info = await asyncio.get_running_loop().run_in_executor(None, ydl.extract_info, video_id, False)
+                            return info
+                
+                result = await asyncio.wait_for(dlp_task(), timeout=45.0)
+                return result
+
+            except asyncio.TimeoutError:
+                logger.warning(f"Global timeout reached for proxy {opts.get('proxy')}. Retrying with new proxy ({i+1}/{max_retries})...")
+                self._proxy_manager.report_dead_proxy(opts.get('proxy'))
+                continue
+
             except Exception as e:
                 error_str = str(e).lower()
-                # Типичные ошибки прокси
                 if any(err in error_str for err in ["proxy", "timeout", "connection refused", "403", "407", "connection aborted", "remote end closed"]):
                     logger.warning(f"Proxy error with {opts.get('proxy')}: {e}. Retrying with new proxy ({i+1}/{max_retries})...")
                     self._proxy_manager.report_dead_proxy(opts.get('proxy'))
-                    await asyncio.sleep(1) # Небольшая задержка перед следующей попыткой
+                    await asyncio.sleep(1)
                     continue
-                else: # Другая, не связанная с сетью ошибка
+                else:
                     logger.error(f"Non-proxy download error: {e}")
-                    return None # или False в зависимости от контекста
+                    return None
         
         logger.error(f"Failed to download/extract info for {video_id} after {max_retries} attempts.")
         return None
