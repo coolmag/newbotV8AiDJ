@@ -5,8 +5,6 @@ import time
 from datetime import timedelta
 import os
 import json
-import subprocess
-import shutil
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -24,6 +22,7 @@ from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager 
 
+# --- ИМПОРТ ИЗ НОВОГО ФАЙЛА (БЕЗОПАСНО) ---
 from gemini_init import HAS_GENAI 
 
 logger = logging.getLogger(__name__)
@@ -36,27 +35,7 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Aurora System Starting...")
     
-    # --- ДИАГНОСТИКА ОКРУЖЕНИЯ (НОВОЕ) ---
-    logger.info("🛠 DIAGNOSTIC CHECK:")
-    
-    # 1. Проверка Node.js
-    node_path = shutil.which("node") or shutil.which("nodejs")
-    if node_path:
-        try:
-            v = subprocess.check_output([node_path, "--version"]).decode().strip()
-            logger.info(f"✅ Node.js DETECTED: {v} at {node_path}")
-        except Exception as e:
-            logger.error(f"⚠️ Node.js found but failed: {e}")
-    else:
-        logger.error("❌ Node.js NOT FOUND! YouTube playback will fail.")
-
-    # 2. Проверка FFmpeg
-    if shutil.which("ffmpeg"):
-        logger.info(f"✅ FFmpeg DETECTED")
-    else:
-        logger.error("❌ FFmpeg NOT FOUND!")
-    # --------------------------------------
-
+    # Log NLP Status
     if HAS_GENAI:
         logger.info("🧠 NLP Engine: ACTIVE (Gemini)")
     else:
@@ -155,7 +134,7 @@ async def telegram_webhook(request: Request):
     try:
         data = await request.json()
         update = Update.de_json(data, tg_app.bot)
-        asyncio.create_task(tg_app.process_update(update))
+        await tg_app.process_update(update)
     except json.JSONDecodeError:
         logger.warning("Webhook received empty or invalid JSON. Likely a webhook validation ping.")
     except ClientDisconnect:

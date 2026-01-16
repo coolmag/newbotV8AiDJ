@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 from radio import RadioManager
-from config import Settings, get_settings
+from config import Settings
 from youtube import YouTubeDownloader
 from chat_service import ChatManager
 from ai_personas import PERSONAS
@@ -239,14 +239,6 @@ async def test_ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    settings = get_settings()
-    
-    # ПРОВЕРКА: Если пользователя нет в списке админов — игнорируем
-    if user_id not in settings.ADMIN_ID_LIST:
-        await update.message.reply_text("⛔️ У вас нет прав админа.")
-        return
-
     chat_id = update.effective_chat.id
     current_mode = ChatManager.get_mode(chat_id)
     text = f"🤖 Режим AI: *{current_mode.upper()}*\nВыберите личность:"
@@ -262,17 +254,10 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
-    settings = get_settings() # Получаем настройки
-    
     await query.answer()
-
     if query.data == "close_admin":
         await query.delete_message()
     elif query.data.startswith("set_mode|"):
-        if user_id not in settings.ADMIN_ID_LIST:
-            await query.answer("⛔️ Только для админа!", show_alert=True)
-            return
         mode = query.data.split("|")[1]
         ChatManager.set_mode(update.effective_chat.id, mode)
         
