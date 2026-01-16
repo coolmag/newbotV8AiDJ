@@ -6,7 +6,6 @@ yt-dlp[default]>=2025.1.12
 aiosqlite
 pydantic
 pydantic-settings
-httpx[http2]
 psutil
 nest-asyncio
 ytmusicapi

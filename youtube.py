@@ -5,6 +5,7 @@ import os
 import glob
 import re
 import time
+import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +15,7 @@ from ytmusicapi import YTMusic
 from config import Settings
 from models import DownloadResult, Source, TrackInfo
 from cache_service import CacheService
+from proxy_manager import ProxyManager
 
 logger = logging.getLogger(__name__)
 
@@ -25,31 +27,122 @@ class SilentLogger:
 class YouTubeDownloader:
     FORBIDDEN_WORDS = ['tutorial', 'making of', 'lesson', 'course', 'podcast', 'backing track', 'karaoke']
 
-    def __init__(self, settings: Settings, cache_service: CacheService):
+    def __init__(self, settings: Settings, cache_service: CacheService, proxy_manager: ProxyManager):
         self._settings = settings
         self._cache = cache_service
+        self._proxy_manager = proxy_manager
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         self._ytmusic = YTMusic()
         self.semaphore = asyncio.Semaphore(3)
         self.search_semaphore = asyncio.Semaphore(5)
         
         cookies_content = os.getenv("COOKIES_CONTENT")
-        cookie_file_path = None
+        self.cookie_file_path = None
         if cookies_content:
-            cookie_file_path = "cookies.txt"
-            with open(cookie_file_path, "w", encoding="utf-8") as f:
+            self.cookie_file_path = "cookies.txt"
+            with open(self.cookie_file_path, "w", encoding="utf-8") as f:
                 f.write(cookies_content)
             logger.info("🍪 Куки успешно загружены!")
 
-        self.ydl_opts = {
+        self.base_ydl_opts = {
             "quiet": True, "no_warnings": True, "noplaylist": True,
             "format": "bestaudio/best", "logger": SilentLogger(),
             "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            'nocheckcertificate': True, 'socket_timeout': 15, 'retries': 3,
+            'nocheckcertificate': True, 
+            'socket_timeout': 20, # Увеличим таймаут для прокси
+            'retries': 2, # Уменьшим, т.к. сами делаем ретраи
         }
-        if cookie_file_path: self.ydl_opts['cookiefile'] = cookie_file_path
-        logger.info("YouTubeDownloader initialized")
+        if self.cookie_file_path: 
+            self.base_ydl_opts['cookiefile'] = self.cookie_file_path
+            
+        logger.info("YouTubeDownloader initialized (Proxy Rotation Mode)")
+
+    def _get_ydl_opts(self) -> dict:
+        """Возвращает копию базовых настроек с новым прокси."""
+        opts = self.base_ydl_opts.copy()
+        proxy = self._proxy_manager.get_proxy()
+        if proxy:
+            opts['proxy'] = proxy
+            logger.info(f"Using proxy: {proxy}")
+        return opts
+
+    async def _execute_yt_dlp(self, video_id: str, download: bool = True, max_retries: int = 5):
+        for i in range(max_retries):
+            opts = self._get_ydl_opts()
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    if download:
+                        # ydl.download() блокирующий, запускаем в executor
+                        await asyncio.get_running_loop().run_in_executor(None, ydl.download, [video_id])
+                    else:
+                        # extract_info тоже блокирующий
+                        info = await asyncio.get_running_loop().run_in_executor(None, ydl.extract_info, video_id, False)
+                        return info
+                return True # Успешное скачивание
+            except Exception as e:
+                error_str = str(e).lower()
+                # Типичные ошибки прокси
+                if any(err in error_str for err in ["proxy", "timeout", "connection refused", "403", "407"]):
+                    logger.warning(f"Proxy error with {opts.get('proxy')}: {e}. Retrying with new proxy ({i+1}/{max_retries})...")
+                    self._proxy_manager.report_dead_proxy(opts.get('proxy'))
+                    await asyncio.sleep(1) # Небольшая задержка перед следующей попыткой
+                    continue
+                else: # Другая, не связанная с сетью ошибка
+                    logger.error(f"Non-proxy download error: {e}")
+                    return None # или False в зависимости от контекста
+        
+        logger.error(f"Failed to download/extract info for {video_id} after {max_retries} attempts.")
+        return None
+
+    async def get_track_info(self, video_id: str) -> Optional[TrackInfo]:
+        cache_key = f"track_info:{video_id}"
+        cached_info = await self._cache.get(cache_key)
+        if cached_info: return cached_info
+        
+        info = await self._execute_yt_dlp(video_id, download=False)
+        if not info: return None
+        
+        track_info = TrackInfo.from_yt_info(info)
+        await self._cache.set(cache_key, track_info, ttl=86400)
+        return track_info
+
+    async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
+        async with self.semaphore:
+            if not track_info:
+                track_info = await self.get_track_info(video_id)
+            if not track_info: return DownloadResult(success=False, error_message="Info failed")
+            
+            file_id_cache_key = f"file_id:{video_id}"
+            cached_file_id = await self._cache.get(file_id_cache_key)
+            if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
+            
+            existing_path = self._find_downloaded_file(video_id)
+            if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
+
+            logger.info(f"[Download] Starting download for: {video_id} with proxy rotation")
+            
+            success = await self._execute_yt_dlp(video_id, download=True)
+            
+            if not success:
+                return DownloadResult(success=False, error_message="Download Error (All proxies failed)", track_info=track_info)
+
+            final_path = await self.wait_for_download_completion(video_id)
+            if not final_path:
+                # Это может случиться, если yt-dlp завершился с 0, но файл не создал (например, ERROR: The downloaded file is empty)
+                # Попробуем еще раз с другим прокси, на всякий случай
+                logger.warning(f"File not found after download for {video_id}, trying one more time...")
+                success = await self._execute_yt_dlp(video_id, download=True, max_retries=1)
+                if not success:
+                     return DownloadResult(success=False, error_message="File lost after download", track_info=track_info)
+                final_path = await self.wait_for_download_completion(video_id)
+                if not final_path:
+                     return DownloadResult(success=False, error_message="File still lost", track_info=track_info)
+
+            return DownloadResult(success=True, file_path=final_path, track_info=track_info)
+    
+    # ... Остальные методы без изменений (search, _parse_ytmusic_entry и т.д.) ...
+    # ... (Они не используют прокси напрямую) ...
 
     def _is_track_valid(self, entry: Dict, decade: Optional[str] = None, is_russian_query: bool = False, strict: bool = True) -> bool:
         if not entry: return False
@@ -79,7 +172,7 @@ class YouTubeDownloader:
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         async with self.search_semaphore:
             clean_query = query.lower().strip()
-            cache_key = f"yt_search_v12:{clean_query}:{search_mode}"
+            cache_key = f"yt_search_v15_proxy:{clean_query}:{search_mode}"
             cached = await self._cache.get(cache_key)
             if cached: return cached
             suffixes = ["", " music", " official audio"]
@@ -148,48 +241,6 @@ class YouTubeDownloader:
             thumbnail_url=thumb_url
         )
 
-    async def get_track_info(self, video_id: str) -> Optional[TrackInfo]:
-        cache_key = f"track_info:{video_id}"
-        cached_info = await self._cache.get(cache_key)
-        if cached_info: return cached_info
-        loop = asyncio.get_running_loop()
-        def do_extract_info():
-            try:
-                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                    return ydl.extract_info(video_id, download=False)
-            except Exception: return None
-        info = await loop.run_in_executor(None, do_extract_info)
-        if not info: return None
-        track_info = TrackInfo.from_yt_info(info)
-        await self._cache.set(cache_key, track_info, ttl=86400)
-        return track_info
-
-    async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
-        async with self.semaphore:
-            if not track_info:
-                track_info = await self.get_track_info(video_id)
-            if not track_info: return DownloadResult(success=False, error_message="Info failed")
-            file_id_cache_key = f"file_id:{video_id}"
-            cached_file_id = await self._cache.get(file_id_cache_key)
-            if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
-            existing_path = self._find_downloaded_file(video_id)
-            if existing_path: return DownloadResult(success=True, file_path=existing_path, track_info=track_info)
-            logger.info(f"[Download] Starting: {video_id}")
-            loop = asyncio.get_running_loop()
-            def do_download():
-                try:
-                    with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                        ydl.download([video_id])
-                    return True
-                except Exception as e: 
-                    logger.error(f"Download error {video_id}: {e}")
-                    return False
-            success = await loop.run_in_executor(None, do_download)
-            if not success: return DownloadResult(success=False, error_message="Download Error", track_info=track_info)
-            final_path = await self.wait_for_download_completion(video_id)
-            if not final_path: return DownloadResult(success=False, error_message="File lost", track_info=track_info)
-            return DownloadResult(success=True, file_path=final_path, track_info=track_info)
-
     async def cache_file_id(self, video_id: str, file_id: str):
         await self._cache.set(f"file_id:{video_id}", file_id, ttl=0)
 
@@ -208,7 +259,6 @@ class YouTubeDownloader:
             await asyncio.sleep(0.5)
         return None
 
-    # Добавляю недостающие методы для совместимости
     async def invalidate_cache(self, video_id: str):
         await self._cache.delete(f"file_id:{video_id}")
 
@@ -216,8 +266,6 @@ class YouTubeDownloader:
         loop = asyncio.get_running_loop()
         def scan_files():
             try:
-                # Добавляем ленивый импорт, если random не был импортирован
-                import random
                 files = list(self._settings.DOWNLOADS_DIR.glob("*.mp3"))
                 random.shuffle(files)
                 return files
