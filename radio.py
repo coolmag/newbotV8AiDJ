@@ -75,9 +75,7 @@ class RadioSession:
         if not self.is_running: return
         try:
             if self.status_message:
-                try:
-                    await self.status_message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
-                    return
+                try: await self.status_message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
                 except BadRequest: self.status_message = None
             
             self.status_message = await self.bot.send_message(self.chat_id, text, parse_mode=ParseMode.MARKDOWN)
@@ -94,127 +92,74 @@ class RadioSession:
         if self._is_searching or not self.is_running: return
         self._is_searching = True
         
-        # Базовый запрос
         base_query = retry_query or self.query
-        
-        # Генерируем вариации запроса, чтобы обойти кэш и найти новые треки
-        variations = [
-            base_query,
-            f"{base_query} mix",
-            f"{base_query} best songs",
-            f"{base_query} playlist",
-            f"{base_query} live",
-            f"{base_query} hits"
-        ]
-        
-        # Перемешиваем вариации, чтобы каждый раз искать по-разному
-        if len(self.played_ids) > 10:
-            random.shuffle(variations)
-
+        variations = [base_query, f"{base_query} mix", f"{base_query} best songs"]
+        if len(self.played_ids) > 10: random.shuffle(variations)
         found_new = False
         
         for q in variations:
             if not self.is_running: break
-            if q != base_query: 
-                logger.info(f"[{self.chat_id}] Пробую вариацию: '{q}'")
-            
             try:
                 tracks = await self.downloader.search(q, decade=self.decade, limit=30)
+                if not tracks: continue
                 new_tracks = [t for t in tracks if t.identifier not in self.played_ids]
-                
                 if new_tracks:
-                    # Если нашли новые треки - добавляем и выходим
                     random.shuffle(new_tracks)
                     self.playlist.extend(new_tracks)
-                    logger.info(f"[{self.chat_id}] Найдено {len(new_tracks)} новых треков по запросу '{q}'")
+                    logger.info(f"[{self.chat_id}] Найдено {len(new_tracks)} новых треков.")
                     found_new = True
                     break
             except Exception as e:
                 logger.error(f"Search error for {q}: {e}")
         
         if not found_new:
-            logger.warning(f"[{self.chat_id}] Исчерпаны треки для '{base_query}'.")
+            if not self.playlist:
+                cached = await self.downloader.get_random_cached_tracks(limit=10)
+                if cached: self.playlist.extend(cached)
             
         self._is_searching = False
 
     async def _radio_loop(self):
-        consecutive_errors = 0
         while self.is_running:
             try:
-                # 1. Пополнение
-                if len(self.playlist) < 3: 
-                    await self._fill_playlist()
-                
-                # 2. Если всё равно пусто - Fallback
+                if len(self.playlist) < 3: await self._fill_playlist()
                 if not self.playlist:
                     await self._update_status("📡 Поиск сигнала...")
-                    # Список резервных жанров, если основной иссяк
-                    fallbacks = [
-                        "lofi hip hop radio", "top 50 global hits", 
-                        "classic rock greatest hits", "summer vibes music",
-                        "deep house mix", "80s disco hits"
-                    ]
-                    # Выбираем случайный, чтобы не зацикливаться
-                    fb = random.choice(fallbacks)
-                    await self._fill_playlist(retry_query=fb)
-                    
-                    if not self.playlist:
-                        consecutive_errors += 1
-                        if consecutive_errors > 5:
-                            # Последний шанс: чистим историю, чтобы играть по кругу
-                            logger.info(f"[{self.chat_id}] Сброс истории прослушивания.")
-                            self.played_ids.clear()
-                            consecutive_errors = 0
-                            continue
-                        
-                        await asyncio.sleep(5)
-                        continue
+                    await asyncio.sleep(5)
+                    continue
 
-                # 3. Играем
                 track = self.playlist.pop(0)
                 self.played_ids.add(track.identifier)
-                # Держим историю разумного размера (300 треков)
-                if len(self.played_ids) > 300: 
-                    self.played_ids = set(list(self.played_ids)[150:])
+                if len(self.played_ids) > 300: self.played_ids = set(list(self.played_ids)[150:])
 
                 success = await self._play_track(track)
                 
                 if success:
-                    consecutive_errors = 0
                     wait_time = min(track.duration, 300) if track.duration > 0 else 180
                     try: await asyncio.wait_for(self.skip_event.wait(), timeout=wait_time)
                     except asyncio.TimeoutError: pass 
-                else:
-                    consecutive_errors += 1
-                    await asyncio.sleep(5)
+                else: await asyncio.sleep(2)
                 
                 self.skip_event.clear()
-                
             except asyncio.CancelledError: break
-            except Exception as e:
-                logger.error(f"Loop error: {e}")
-                await asyncio.sleep(5)
-        
+            except Exception as e: logger.error(f"Loop error: {e}"); await asyncio.sleep(5)
         self.is_running = False
 
     async def _play_track(self, track: TrackInfo) -> bool:
-        result: Optional[DownloadResult] = None
+        result: Optional[DownloadResult] = None # Инициализация (ФИКС ОШИБКИ)
         if not self.is_running: return False
         try:
             await self._update_status(f"⬇️ Загрузка: *{track.title}*...")
-            if not self.is_running: return False
-
-            result = await self.downloader.download(track.identifier)
+            
+            result = await self.downloader.download(track.identifier, track_info=track)
+            
             if not result or not result.success: return False
             
             caption = get_now_playing_message(track, self.display_name)
             markup = None
             base_url = self.settings.BASE_URL.strip() if self.settings.BASE_URL else ""
             if base_url.startswith("https") and self.chat_type != ChatType.CHANNEL:
-                if self.chat_type == ChatType.PRIVATE:
-                    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🎧 Плеер", web_app=WebAppInfo(url=base_url))]])
-                else:
-                    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Плеер", url=base_url)]])
+                markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Плеер", url=base_url)]])
 
             try:
                 if result.file_id:
@@ -223,10 +168,18 @@ class RadioSession:
                     with open(result.file_path, 'rb') as f:
                         msg = await self.bot.send_audio(self.chat_id, audio=f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
                         if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
-            except Forbidden:
-                await self._handle_forbidden()
+            except Forbidden: await self._handle_forbidden(); return False
+            except Exception as e:
+                if result and result.file_id: # Проверка result
+                    await self.downloader.invalidate_cache(track.identifier)
+                    await self._update_status(f"🔄 Перекачиваю: *{track.title}*...")
+                    result = await self.downloader.download(track.identifier, track_info=track)
+                    if result.success and result.file_path:
+                         with open(result.file_path, 'rb') as f:
+                             msg = await self.bot.send_audio(self.chat_id, audio=f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+                             if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
+                         return True
                 return False
-            except Exception: return False
             
             await self._delete_status()
             return True
