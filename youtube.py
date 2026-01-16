@@ -83,7 +83,7 @@ class YouTubeDownloader:
             except Exception as e:
                 error_str = str(e).lower()
                 # Типичные ошибки прокси
-                if any(err in error_str for err in ["proxy", "timeout", "connection refused", "403", "407"]):
+                if any(err in error_str for err in ["proxy", "timeout", "connection refused", "403", "407", "connection aborted", "remote end closed"]):
                     logger.warning(f"Proxy error with {opts.get('proxy')}: {e}. Retrying with new proxy ({i+1}/{max_retries})...")
                     self._proxy_manager.report_dead_proxy(opts.get('proxy'))
                     await asyncio.sleep(1) # Небольшая задержка перед следующей попыткой
