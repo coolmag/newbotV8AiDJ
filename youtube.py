@@ -143,7 +143,28 @@ class YouTubeDownloader:
             loop = asyncio.get_running_loop()
             def do_download():
                 try:
-                    with yt_dlp.YoutubeDL(self.download_opts) as ydl:
+                    # "Simplest Patch" - последняя попытка прямого скачивания
+                    opts = {
+                        "quiet": True,
+                        "no_warnings": True,
+                        "format": "251/250/worstaudio/worst",
+                        "socket_timeout": 20,
+                        "retries": 5,
+                        "ignoreerrors": True,
+                        "extractor_args": {"youtube": {"player_client": ["android_music"]}},
+                        "http_headers": {
+                            "User-Agent": "com.google.android.apps.youtube.music/6.21.51",
+                        },
+                        "postprocessors": [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '192',
+                        }],
+                        "outtmpl": str(self._settings.DOWNLOADS_DIR / f"{video_id}.%(ext)s"),
+                        'nocheckcertificate': True,
+                    }
+                    
+                    with yt_dlp.YoutubeDL(opts) as ydl:
                         ydl.download([url])
                     return True
                 except Exception as e:
