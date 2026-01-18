@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    ADAPTER: RAILWAY 'PIPED' FINAL (2026) - TrackInfo Fix
+    ADAPTER: RAILWAY 'PIPED' FINAL (2026) - Final Fix
     - Основной метод скачивания через Piped API.
     - Резервный метод через yt-dlp с минимальными настройками.
     - Поиск с куками.
-    - Корректная передача TrackInfo.
+    - Исправлена логика передачи TrackInfo.
     """
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
@@ -41,7 +41,6 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(1) 
         self.search_semaphore = asyncio.Semaphore(2)
 
-        # Опции для поиска (с куками)
         self.search_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -54,7 +53,6 @@ class YouTubeDownloader:
             self.search_opts['cookiefile'] = str(self.cookies_path)
             logger.info("Cookie file applied to SEARCH config.")
             
-        # Опции для резервного скачивания
         self.ytdlp_fallback_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -65,7 +63,6 @@ class YouTubeDownloader:
             "ignoreerrors": True,
             'nocheckcertificate': True,
         }
-
         logger.info("🟢 YouTube 'Piped' Engine initialized.")
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
@@ -82,14 +79,10 @@ class YouTubeDownloader:
                 with yt_dlp.YoutubeDL(self.search_opts) as ydl:
                     try:
                         return ydl.extract_info(f"ytsearch{limit}:{search_text}", download=False)
-                    except Exception as e:
-                        logger.error(f"Search Error: {e}", exc_info=True)
-                        return None
+                    except Exception: return None
             try:
                 res = await asyncio.wait_for(loop.run_in_executor(None, do_search), timeout=25.0)
-            except asyncio.TimeoutError:
-                logger.error(f"[YT Search] TIMEOUT for query: '{query}'")
-                return []
+            except asyncio.TimeoutError: return []
             
             results = []
             if res and 'entries' in res:
@@ -100,8 +93,7 @@ class YouTubeDownloader:
                         title=entry.get('title', 'Unknown'),
                         artist=entry.get('channel', 'Unknown'),
                         duration=int(entry.get('duration') or 0),
-                        source=Source.YOUTUBE,
-                        thumbnail_url=None))
+                        source=Source.YOUTUBE))
             if results: await self._cache.set(cache_key, results, ttl=3600)
             return results
 
@@ -114,64 +106,55 @@ class YouTubeDownloader:
         if mp3_path.exists() and mp3_path.stat().st_size > 20000:
             return DownloadResult(success=True, file_path=mp3_path, track_info=track_info)
         
-        logger.info(f"[YT] Attempting Piped API download for {video_id}")
-        result = await self._download_piped(video_id, track_info) # Pass track_info
+        # Попытка №1: Piped
+        result = await self._download_piped(video_id, track_info)
         
+        # Попытка №2: yt-dlp fallback
         if not result.success:
-            logger.warning(f"[YT] Piped download failed. Falling back to yt-dlp minimal for {video_id}")
-            result = await self._download_ytdlp_minimal(video_id, track_info) # Pass track_info
+            result = await self._download_ytdlp_minimal(video_id, track_info)
         
-        final_result = result
-        if result.success and result.file_path and result.file_path.suffix != ".mp3":
-             logger.info(f"Downloaded non-mp3 file {result.file_path.name}, converting...")
-             final_result = await self._run_ffmpeg_postprocessor(result.file_path, track_info)
+        # Если все еще неудача, выходим
+        if not result.success:
+            return result
 
-        # --- FINAL DIAGNOSTIC LOG ---
-        logger.info(f"FINAL DL RESULT: success={final_result.success}, path={final_result.file_path}, track_info is None: {final_result.track_info is None}")
-        if final_result.track_info is None and track_info is not None:
-            logger.warning("TrackInfo was lost! Re-attaching.")
-            final_result.track_info = track_info
+        # Попытка №3: Конвертация в MP3
+        if result.file_path and result.file_path.suffix != ".mp3":
+            result = await self._run_ffmpeg_postprocessor(result.file_path, track_info)
 
-        return final_result
+        # Финальная проверка и возврат
+        if result.success and result.track_info is None:
+            logger.warning("TrackInfo was lost and re-attached at the last moment.")
+            result.track_info = track_info
 
-    async def _download_piped(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult: # Added track_info
+        return result
+
+    async def _download_piped(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult:
         piped_instances = ["https://pipedapi.kavin.rocks", "https://pipedapi.moomoo.me", "https://pipedapi-libre.kavin.rocks", "https://pipedapi.smnz.de"]
         random.shuffle(piped_instances)
-
         async with httpx.AsyncClient(timeout=20.0) as client:
             for instance in piped_instances:
                 try:
-                    logger.info(f"Trying Piped instance: {instance} for {video_id}")
                     api_url = f"{instance}/streams/{video_id}"
                     info_resp = await client.get(api_url)
                     info_resp.raise_for_status()
                     data = info_resp.json()
-                    
                     audio_streams = data.get("audioStreams", [])
                     if not audio_streams: continue
-
                     best_audio = max(audio_streams, key=lambda x: x.get("bitrate", 0))
                     audio_url = best_audio.get("url")
-                    
                     if not audio_url: continue
-
                     file_path = self._settings.DOWNLOADS_DIR / f"{video_id}.{best_audio.get('format', 'webm').lower()}"
-                    
                     with file_path.open("wb") as f:
                         async with client.stream("GET", audio_url, timeout=60) as response:
                             response.raise_for_status()
                             async for chunk in response.aiter_bytes():
                                 f.write(chunk)
-                    
                     if file_path.exists() and file_path.stat().st_size > 20000:
-                        logger.info(f"Piped download successful from {instance}")
-                        return DownloadResult(success=True, file_path=file_path, track_info=track_info) # Pass track_info
-                except Exception as e:
-                    logger.warning(f"Piped instance {instance} failed: {e}")
-                    continue
+                        return DownloadResult(success=True, file_path=file_path, track_info=track_info)
+                except Exception: continue
         return DownloadResult(success=False, error_message="All Piped instances failed")
 
-    async def _download_ytdlp_minimal(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult: # Added track_info
+    async def _download_ytdlp_minimal(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult:
         url = f"https://www.youtube.com/watch?v={video_id}"
         async with self.semaphore:
             loop = asyncio.get_running_loop()
@@ -180,36 +163,33 @@ class YouTubeDownloader:
                     with yt_dlp.YoutubeDL(self.ytdlp_fallback_opts) as ydl:
                         ydl.download([url])
                     return True
-                except Exception as e:
-                    logger.error(f"yt-dlp minimal Download Error '{video_id}': {e}", exc_info=True) # Added logging
-                    return False
-            
+                except Exception: return False
             success = await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=90.0)
             if success:
-                return await self._wait_for_file(video_id, track_info) # Pass track_info
+                return await self._wait_for_file(video_id, track_info)
         return DownloadResult(success=False, error_message="yt-dlp fallback failed")
 
     async def _run_ffmpeg_postprocessor(self, input_path: Path, track_info: Optional[TrackInfo]) -> DownloadResult:
         output_path = input_path.with_suffix(".mp3")
         try:
             proc = await asyncio.create_subprocess_exec(
-                'ffmpeg', '-i', str(input_path), '-codec:a', 'libmp3lame', '-q:a', '2', str(output_path),
+                'ffmpeg', '-i', str(input_path), '-y', '-codec:a', 'libmp3lame', '-q:a', '2', str(output_path),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            stdout, stderr = await proc.communicate()
+            await proc.communicate()
             if proc.returncode == 0:
-                input_path.unlink()
+                try: input_path.unlink()
+                except OSError: pass
                 return DownloadResult(success=True, file_path=output_path, track_info=track_info)
-            return DownloadResult(success=False, error_message="FFmpeg conversion failed", track_info=track_info) # Pass track_info
-        except Exception as e:
-            logger.error(f"FFmpeg execution error: {e}", exc_info=True) # Added logging
-            return DownloadResult(success=False, error_message="FFmpeg execution error", track_info=track_info) # Pass track_info
+            return DownloadResult(success=False, error_message="FFmpeg conversion failed", track_info=track_info)
+        except Exception:
+            return DownloadResult(success=False, error_message="FFmpeg execution error", track_info=track_info)
 
-    async def _wait_for_file(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult: # Added track_info
+    async def _wait_for_file(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult:
         start_wait = time.time()
         while time.time() - start_wait < 15:
             for ext in ['.mp3', '.webm', '.m4a', '.opus']:
                 path = self._settings.DOWNLOADS_DIR / f"{video_id}{ext}"
                 if path.exists() and path.stat().st_size > 20000:
-                    return DownloadResult(success=True, file_path=path, track_info=track_info) # Pass track_info
+                    return DownloadResult(success=True, file_path=path, track_info=track_info)
             await asyncio.sleep(1)
         return DownloadResult(success=False, error_message="File not found after download", track_info=track_info)
