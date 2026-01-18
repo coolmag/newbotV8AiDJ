@@ -2,13 +2,12 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from functools import lru_cache
 import os
-import logging # Added for diagnostics
+import logging
+
+logger = logging.getLogger(__name__)
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator, ValidationInfo
-
-# Added for diagnostics
-logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -22,6 +21,7 @@ class Settings(BaseSettings):
     COOKIES_CONTENT: str = ""
     PROXY_URL: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
+    PIPED_INSTANCES: str = "" # New field for configurable Piped instances
     
     # --- VK Music Engine (Railway-friendly) ---
     VK_LOGIN: Optional[str] = None
@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     
     # --- Явное объявление полей ---
     ADMIN_ID_LIST: List[int] = []
+    PIPED_INSTANCE_LIST: List[str] = [] # Derived list from PIPED_INSTANCES
     
     BASE_DIR: Path = Path(__file__).resolve().parent
     DOWNLOADS_DIR: Path = BASE_DIR / "downloads"
@@ -60,6 +61,42 @@ class Settings(BaseSettings):
         except ValueError as e:
             logger.error(f"❌ Failed to parse ADMIN_IDS. Check for non-numeric values. Error: {e}")
             return []
+
+    @field_validator("PIPED_INSTANCE_LIST", mode="before")
+    @classmethod
+    def _assemble_piped_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
+        piped_str = info.data.get("PIPED_INSTANCES", "")
+        
+        # New default list based on user's provided working instances
+        default_instances = [
+            "https://pipedapi.kavin.rocks",
+            "https://pipedapi.leptons.xyz",
+            "https://pipedapi.nosebs.ru",
+            "https://pipedapi-libre.kavin.rocks",
+            "https://piped-api.privacy.com.de",
+            "https://pipedapi.adminforge.de",
+            "https://api.piped.yt",
+            "https://pipedapi.drgns.space",
+            "https://pipedapi.owo.si",
+            "https://pipedapi.ducks.party",
+            "https://piped-api.codespace.cz",
+            "https://pipedapi.reallyaweso.me",
+            "https://api.piped.private.coffee",
+            "https://pipedapi.darkness.services",
+            "https://pipedapi.orangenet.cc",
+        ]
+        
+        if not piped_str:
+            logger.info("⚙️ PIPED_INSTANCES not set, using default list.")
+            return default_instances
+        
+        try:
+            instance_list = [i.strip() for i in piped_str.split(",") if i.strip()]
+            logger.info(f"✅ Parsed PIPED_INSTANCES: {instance_list}")
+            return instance_list
+        except Exception as e:
+            logger.error(f"❌ Failed to parse PIPED_INSTANCES. Using default. Error: {e}")
+            return default_instances
 
 @lru_cache()
 def get_settings() -> Settings:

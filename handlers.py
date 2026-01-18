@@ -55,10 +55,34 @@ async def _do_play(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE,
         await msg.delete()
         dl_res = await context.application.downloader.download(tracks[0].identifier)
         if dl_res.success and dl_res.file_path:
-            with open(dl_res.file_path, 'rb') as f:
-                await context.bot.send_audio(chat_id, f, title=dl_res.track_info.title, performer=dl_res.track_info.artist)
+            try:
+                # Безопасное получение названия и артиста
+                title = "Unknown Title"
+                performer = "Unknown Artist"
+                duration = 0 # Default duration
+                
+                if dl_res.track_info:
+                    title = dl_res.track_info.title or title
+                    performer = dl_res.track_info.artist or performer
+                    duration = dl_res.track_info.duration or duration
+                
+                # Отправка файла
+                with open(dl_res.file_path, 'rb') as f:
+                    await context.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=f,
+                        title=title[:64], # Telegram ограничение на длину заголовка
+                        performer=performer[:64], # Ограничение на длину имени исполнителя
+                        duration=duration
+                    )
+                logger.info(f"[{chat_id}] Successfully sent audio: '{title}' by '{performer}'")
+                
+            except Exception as e:
+                logger.error(f"[{chat_id}] Error sending audio: {e}", exc_info=True)
+                await context.bot.send_message(chat_id, "❌ Ошибка при отправке файла.")
         else:
-             await context.bot.send_message(chat_id, f"😕 Не удалось скачать трек: {dl_res.error_message}")
+             logger.warning(f"[{chat_id}] Download result not successful: {dl_res.error_message}")
+             await context.bot.send_message(chat_id, f"😕 Не удалось скачать трек: {dl_res.error_message or 'Неизвестная ошибка'}")
     else:
         await msg.edit_text("😕 Не нашла ничего по запросу.")
 
