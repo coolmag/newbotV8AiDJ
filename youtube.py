@@ -100,7 +100,8 @@ class YouTubeDownloader:
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         file_id_cache_key = f"file_id:{video_id}"
         cached_file_id = await self._cache.get(file_id_cache_key)
-        if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
+        if cached_file_id:
+            return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
 
         mp3_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         if mp3_path.exists() and mp3_path.stat().st_size > 20000:
@@ -121,11 +122,19 @@ class YouTubeDownloader:
         if result.file_path and result.file_path.suffix != ".mp3":
             result = await self._run_ffmpeg_postprocessor(result.file_path, track_info)
 
-        # Финальная проверка и возврат
-        if result.success and result.track_info is None:
-            logger.warning("TrackInfo was lost and re-attached at the last moment.")
-            result.track_info = track_info
-
+        # --- SCORCHED EARTH FIX ---
+        # Если мы добрались сюда с успехом, создаем новый, чистый объект
+        # чтобы гарантировать, что track_info не был потерян.
+        if result.success:
+            logger.info("Download successful. Constructing new, clean final result.")
+            return DownloadResult(
+                success=True,
+                file_path=result.file_path,
+                file_id=result.file_id,
+                track_info=track_info # Используем оригинальный, гарантированно валидный track_info
+            )
+        
+        # Если после всех шагов все равно неудача
         return result
 
     async def _download_piped(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult:
