@@ -121,11 +121,18 @@ class YouTubeDownloader:
             logger.warning(f"[YT] Piped download failed. Falling back to yt-dlp minimal for {video_id}")
             result = await self._download_ytdlp_minimal(video_id, track_info) # Pass track_info
         
-        if result.success and result.file_path.suffix != ".mp3":
+        final_result = result
+        if result.success and result.file_path and result.file_path.suffix != ".mp3":
              logger.info(f"Downloaded non-mp3 file {result.file_path.name}, converting...")
-             return await self._run_ffmpeg_postprocessor(result.file_path, track_info)
+             final_result = await self._run_ffmpeg_postprocessor(result.file_path, track_info)
 
-        return result
+        # --- FINAL DIAGNOSTIC LOG ---
+        logger.info(f"FINAL DL RESULT: success={final_result.success}, path={final_result.file_path}, track_info is None: {final_result.track_info is None}")
+        if final_result.track_info is None and track_info is not None:
+            logger.warning("TrackInfo was lost! Re-attaching.")
+            final_result.track_info = track_info
+
+        return final_result
 
     async def _download_piped(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult: # Added track_info
         piped_instances = ["https://pipedapi.kavin.rocks", "https://pipedapi.moomoo.me", "https://pipedapi-libre.kavin.rocks", "https://pipedapi.smnz.de"]
