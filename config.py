@@ -69,21 +69,16 @@ class Settings(BaseSettings):
         
         # New default list based on user's provided working instances
         default_instances = [
+            "https://api.piped.yt",
             "https://pipedapi.kavin.rocks",
+            "https://pipedapi.adminforge.de",
+            "https://piped-api.privacy.com.de",
             "https://pipedapi.leptons.xyz",
             "https://pipedapi.nosebs.ru",
-            "https://pipedapi-libre.kavin.rocks",
-            "https://piped-api.privacy.com.de",
-            "https://pipedapi.adminforge.de",
-            "https://api.piped.yt",
-            "https://pipedapi.drgns.space",
             "https://pipedapi.owo.si",
             "https://pipedapi.ducks.party",
             "https://piped-api.codespace.cz",
             "https://pipedapi.reallyaweso.me",
-            "https://api.piped.private.coffee",
-            "https://pipedapi.darkness.services",
-            "https://pipedapi.orangenet.cc",
         ]
         
         if not piped_str:
