@@ -51,7 +51,8 @@ class YouTubeDownloader:
         }
         if self.cookies_path.exists():
             self.search_opts['cookiefile'] = str(self.cookies_path)
-            logger.info("Cookie file applied to SEARCH config.")
+            self.ytdlp_fallback_opts['cookiefile'] = str(self.cookies_path)
+            logger.info("Cookie file applied to both SEARCH and FALLBACK configs.")
             
         # Опции для резервного скачивания
         self.ytdlp_fallback_opts = {
