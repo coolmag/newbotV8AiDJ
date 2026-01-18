@@ -13,399 +13,184 @@ from cache_service import CacheService
 logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
-
     """
-
-    ADAPTER: YOUTUBE HYBRID (v2) - Railway Edition
-
-    - Reads cookies from COOKIES_CONTENT env var.
-
-    - Enhanced logging for search diagnostics.
-
+    ADAPTER: RAILWAY SURVIVAL EDITION (2026) - Adapted
+    Использует Nightly build yt-dlp + Android Client API + Cookies из COOKIES_CONTENT env.
     """
-
     def __init__(self, settings: Settings, cache_service: CacheService):
-
         self._settings = settings
-
         self._cache = cache_service
-
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
-
         
+        # --- RAILWAY MAGIC: Адаптировано под существующую переменную COOKIES_CONTENT ---
+        self.cookies_path = Path("cookies/youtube_railway.txt")
+        cookies_content = self._settings.COOKIES_CONTENT
+        
+        if cookies_content:
+            try:
+                self.cookies_path.parent.mkdir(exist_ok=True)
+                # Важно: w+ запись, чтобы обновить если изменились
+                with open(self.cookies_path, "w", encoding="utf-8") as f:
+                    f.write(cookies_content)
+                logger.info("🍪 Cookies successfully loaded from Railway Env (COOKIES_CONTENT)!")
+            except Exception as e:
+                logger.error(f"Failed to write cookies: {e}")
+        else:
+            logger.warning("⚠️ CRITICAL: No COOKIES_CONTENT variable found! Ban imminent.")
 
-        # Снижаем нагрузку. 2 потока — потолок для облачных IP.
-
-        self.semaphore = asyncio.Semaphore(2)
-
+        # STRICT LIMITS: На Railway нельзя качать параллельно с одного IP
+        self.semaphore = asyncio.Semaphore(1) 
         self.search_semaphore = asyncio.Semaphore(2)
-
         
-
         self._url_cache: Dict[str, str] = {}
 
-
-
+        # ОПЦИИ СМЕРТИ (То, что пробивает защиту 2026)
         self.ydl_opts = {
-
             "quiet": True,
-
             "no_warnings": True,
-
-            # Важно! Формат bestaudio часто лучше чем конкретный mp3 для скорости
-
             "format": "bestaudio/best",
-
             
-
-            # --- ГЛАВНЫЙ ФИКС ЗАВИСАНИЙ ---
-
-            "socket_timeout": 15,        # Если нет ответа 15 сек — обрыв
-
-            "retries": 5,                # Пробуем 5 раз
-
-            "fragment_retries": 5,       # Если кусок видео не скачался
-
-            
-
-            # --- ГЛАВНЫЙ ФИКС БЛОКИРОВОК (Android Client) ---
-
+            # 1. МАСКИРОВКА (Android API - самое стабильное)
             "extractor_args": {
-
                 "youtube": {
-
-                    # Притворяемся Android-приложением (самый живучий метод сейчас)
-
-                    "player_client": ["android", "web"],
-
-                    "player_skip": ["webpage", "configs", "js"],
-
-                    "skip": ["dash", "hls"], # Пропуск потоковых форматов (часто виснут)
-
+                    "player_client": ["android", "web"], # Android главный
+                    "player_skip": ["webpage", "configs", "js"], # Не грузим мусор
+                    "skip": ["dash", "hls"], # Избегаем троттлинга
                 }
-
             },
-
             
-
-            # --- АНТИ-ДЕТЕКТ ЗАГОЛОВКИ (Как у Android телефона) ---
-
-            "http_headers": {
-
-                "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.105 Mobile Safari/537.36",
-
-                "Accept-Language": "en-US,en;q=0.9",
-
-            },
-
-
-
+            # 2. АНТИ-ФРИЗ (Чтобы бот не зависал)
+            "socket_timeout": 20,
+            "retries": 10,
+            
+            # 3. АНТИ-БАН СКОРОСТИ
+            # Важно для Railway: качаем медленно, но уверенно
+            "ratelimit": 2_000_000, # 2MB/s макс
+            "sleep_interval": 3,    # Пауза между запросами видео
+            
+            # 4. ОБРАБОТКА
             "postprocessors": [{
-
                 'key': 'FFmpegExtractAudio',
-
                 'preferredcodec': 'mp3',
-
                 'preferredquality': '192',
-
             }],
-
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-
             'nocheckcertificate': True,
-
             'ignoreerrors': True,
-
         }
-
         
+        # Подключаем куки
+        if self.cookies_path.exists():
+            self.ydl_opts['cookiefile'] = str(self.cookies_path)
 
-        # --- RAILWAY COOKIE INTEGRATION ---
-
-        if self._settings.COOKIES_CONTENT:
-
-            try:
-
-                # Write the content from the env var to the file specified in config
-
-                self._settings.COOKIES_FILE.write_text(self._settings.COOKIES_CONTENT)
-
-                self.ydl_opts['cookiefile'] = str(self._settings.COOKIES_FILE)
-
-                logger.info("🍪 Cookies successfully loaded from environment variable.")
-
-            except Exception as e:
-
-                logger.error(f"Failed to write cookies from env var to file: {e}")
-
-        else:
-
-            logger.warning("⚠️ COOKIES_CONTENT env var is not set. Running without cookies.")
-
-
-
-        logger.info("🟢 YouTube Hybrid Engine (v2) initialized")
-
-
+        logger.info("🟢 YouTube Railway Survival Engine initialized")
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
-
-        """Быстрый поиск через ytsearch с таймаутом и улучшенным логированием."""
-
+        """Поиск через ytsearch (быстрый)."""
         clean_query = query.lower().strip()
-
-        
-
-        # Хак: добавляем "audio", если ищем не клип
-
-        if "audio" not in clean_query and "lyrics" not in clean_query:
-
+        if "audio" not in clean_query:
             search_text = f"{clean_query} audio"
-
         else:
-
             search_text = clean_query
 
-
-
-        cache_key = f"yt_search_v3:{clean_query}"
-
+        cache_key = f"yt_search_v4:{clean_query}"
         cached = await self._cache.get(cache_key)
-
-        if cached:
-
-            logger.info(f"[YT Search] Cache HIT for query: '{query}'")
-
-            return cached
-
-
+        if cached: return cached
 
         async with self.search_semaphore:
-
             loop = asyncio.get_running_loop()
-
             
-
             def do_search():
-
-                # ytsearchN: возвращает N результатов
-
-                search_query = f"ytsearch{limit}:{search_text}"
-
-                
-
-                # Копируем опции и включаем flat_playlist для скорости (не качаем данные видео)
-
                 opts = self.ydl_opts.copy()
-
-                opts['extract_flat'] = True 
-
+                opts['extract_flat'] = True # Ускорение в 10 раз
+                search_query = f"ytsearch{limit}:{search_text}"
                 
-
                 with yt_dlp.YoutubeDL(opts) as ydl:
-
                     try:
-
                         return ydl.extract_info(search_query, download=False)
-
                     except Exception as e:
-
-                        # Log the specific yt-dlp error
-
-                        logger.error(f"[YT Search] Downloader exception for query '{query}': {e}", exc_info=True)
-
+                        logger.error(f"Search Error: {e}")
                         return None
 
-
-
             try:
-
-                # Обертка в wait_for, чтобы поиск не вешал бота
-
-                res = await asyncio.wait_for(loop.run_in_executor(None, do_search), timeout=20.0)
-
+                res = await asyncio.wait_for(loop.run_in_executor(None, do_search), timeout=25.0)
             except asyncio.TimeoutError:
-
-                logger.error(f"[YT Search] TIMEOUT for query: '{query}'")
-
                 return []
-
             
-
-            if not res or 'entries' not in res or not res['entries']:
-
-                logger.warning(f"[YT Search] FAILED or NO RESULTS for query: '{query}'.")
-
-                return []
-
-
-
             results = []
-
-            for entry in res['entries']:
-
-                if not entry: continue
-
-                
-
-                tid = str(entry.get('id', ''))
-
-                title = entry.get('title', 'Unknown')
-
-                
-
-                # При extract_flat=True длительность иногда может быть None
-
-                duration = int(entry.get('duration') or 0)
-
-                
-
-                # Базовая фильтрация мусора
-
-                if duration > 0 and (duration < 30 or duration > 1200):
-
-                    continue
-
+            if res and 'entries' in res:
+                for entry in res['entries']:
+                    if not entry: continue
+                    tid = str(entry.get('id', ''))
+                    duration = int(entry.get('duration') or 0)
                     
-
-                results.append(TrackInfo(
-
-                    identifier=tid,
-
-                    title=title,
-
-                    artist=entry.get('channel', 'Unknown'), # uploader -> channel
-
-                    duration=duration,
-
-                    source=Source.YOUTUBE,
-
-                    thumbnail_url=None # При flat поиске тамбнейла может не быть сразу
-
-                ))
-
-
+                    if duration > 0 and (duration < 30 or duration > 1200):
+                        continue
+                        
+                    results.append(TrackInfo(
+                        identifier=tid,
+                        title=entry.get('title', 'Unknown'),
+                        artist=entry.get('channel', 'Unknown'),
+                        duration=duration,
+                        source=Source.YOUTUBE,
+                        thumbnail_url=None
+                    ))
 
             if results:
-
-                logger.info(f"[YT Search] Success. Found {len(results)} tracks for query: '{query}'")
-
                 await self._cache.set(cache_key, results, ttl=3600)
-
-            else:
-
-                # This case is hit if all entries were filtered out
-
-                logger.warning(f"[YT Search] Found entries for '{query}', but all were filtered out (e.g., by duration).")
-
-
-
             return results
 
-
-
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
-
         video_id = str(video_id)
-
         
-
-        # 1. Кэш ID
-
+        # Проверки кэша и файлов (оставляем как есть)
         file_id_cache_key = f"file_id:{video_id}"
-
         cached_file_id = await self._cache.get(file_id_cache_key)
-
-        if cached_file_id:
-
-            return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
-
-
-
-        # 2. Файл на диске
+        if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
 
         for ext in ['.mp3', '.m4a', '.webm']:
-
             existing = self._settings.DOWNLOADS_DIR / f"{video_id}{ext}"
-
             if existing.exists() and existing.stat().st_size > 50000:
-
                 return DownloadResult(success=True, file_path=existing, track_info=track_info)
-
-
 
         url = f"https://www.youtube.com/watch?v={video_id}"
 
-
-
         async with self.semaphore:
-
             logger.info(f"[YT] Downloading: {video_id}")
-
             loop = asyncio.get_running_loop()
-
             
-
             def do_download():
-
                 try:
-
-                    # Важно: создаем новый экземпляр опций для каждого скачивания
-
                     opts = self.ydl_opts.copy()
-
                     opts['outtmpl'] = str(self._settings.DOWNLOADS_DIR / f"{video_id}.%(ext)s")
-
                     
-
+                    # Пытаемся скачать
                     with yt_dlp.YoutubeDL(opts) as ydl:
-
                         ydl.download([url])
-
                     return True
-
                 except Exception as e:
-
+                    # Ловим специфичные ошибки
+                    err_str = str(e).lower()
+                    if "sign in" in err_str or "cookies" in err_str:
+                        logger.critical("🚨 COOKIES EXPIRED OR INVALID! Update COOKIES_CONTENT.")
                     logger.error(f"Download Error {video_id}: {e}")
-
                     return False
 
-
-
             try:
-
-                # Ждем скачивания максимум 60 секунд, иначе убиваем процесс
-
-                success = await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=60.0)
-
+                # 90 секунд на скачивание, потом обрыв
+                success = await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=90.0)
             except asyncio.TimeoutError:
-
-                logger.error(f"Download TIMEOUT for {video_id}")
-
-                return DownloadResult(success=False, error_message="Download timed out (ghosting)", track_info=track_info)
-
+                return DownloadResult(success=False, error_message="Timeout (Ghosting)", track_info=track_info)
             
-
             if not success:
+                return DownloadResult(success=False, error_message="Download Failed (Check Logs)", track_info=track_info)
 
-                return DownloadResult(success=False, error_message="Download Failed", track_info=track_info)
-
-
-
-            # 4. Проверка результата
-
+            # Ждем появления файла
             start_wait = time.time()
-
-            while time.time() - start_wait < 10: # Ждем конвертации FFmpeg
-
+            while time.time() - start_wait < 10:
                 for path in self._settings.DOWNLOADS_DIR.glob(f"{video_id}.*"):
-
                     if path.is_file() and path.stat().st_size > 50000:
-
                         return DownloadResult(success=True, file_path=path, track_info=track_info)
-
                 await asyncio.sleep(1)
-
             
-
-            return DownloadResult(success=False, error_message="File lost", track_info=track_info)
+            return DownloadResult(success=False, error_message="File lost after download", track_info=track_info)
