@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 python-telegram-bot
 google-genai==1.57.0
-yt-dlp[default]>=2026.01.15
+yt-dlp[default]>=2025.12.8
 aiosqlite
 pydantic
 pydantic-settings
