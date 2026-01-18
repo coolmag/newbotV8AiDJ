@@ -132,22 +132,16 @@ async def ai_dj_generate(prompt: str, request: Request):
 
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
-    downloader = request.app.state.downloader
-    found_path = None
     settings = request.app.state.settings
-    for ext in ['.mp3', '.m4a', '.webm']:
-        existing_path = settings.DOWNLOADS_DIR / f"{video_id}{ext}"
-        if existing_path.exists() and existing_path.stat().st_size > 50000:
-            found_path = existing_path
-            break
     
-    if not found_path:
-        res = await downloader.download(video_id)
-        if res.success:
-            found_path = res.file_path
+    # Ищем только готовый, сконвертированный MP3 файл
+    file_path = settings.DOWNLOADS_DIR / f"{video_id}.mp3"
     
-    if found_path: return FileResponse(found_path)
-    return JSONResponse(status_code=404, content={"error": "File not found"})
+    if file_path.exists() and file_path.stat().st_size > 20000:
+        return FileResponse(file_path)
+        
+    # Если файла нет, мгновенно отвечаем 404, не пытаясь скачивать
+    return JSONResponse(status_code=404, content={"error": "File not yet cached. Please wait and try again."})
 
 @app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}
@@ -156,6 +150,14 @@ async def health(): return {"status": "ok", "uptime": get_uptime()}
 async def get_playlist(query: str, request: Request):
     downloader = request.app.state.downloader
     tracks = await downloader.search(query=query, limit=15)
+    
+    # --- PRE-CACHING ---
+    # Запускаем скачивание в фоне для всех найденных треков
+    if tracks:
+        logger.info(f"Pre-caching {len(tracks)} tracks for query: '{query}'")
+        for track in tracks:
+            asyncio.create_task(downloader.download(track.identifier, track))
+    
     return {"playlist": tracks}
 
 @app.post("/telegram")
