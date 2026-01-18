@@ -47,6 +47,10 @@ class YouTubeDownloader:
             "skip_download": True,
             "socket_timeout": 20,
             "retries": 3,
+            # Добавим User-Agent для поиска, чтобы быть более похожим на браузер
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            },
         }
         
         # --- ОПЦИИ ДЛЯ СКАЧИВАНИЯ ---
@@ -54,7 +58,7 @@ class YouTubeDownloader:
             "quiet": True,
             "no_warnings": True,
             "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-            "max_filesize": 15 * 1024 * 1024,
+            "max_filesize": 15 * 1024 * 1024, # 15MB limit
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             "noplaylist": True,
             "keepvideo": False,
@@ -67,6 +71,17 @@ class YouTubeDownloader:
             "socket_timeout": 30,
             "retries": 10,
             "ignoreerrors": True,
+            
+            # --- ВОЗВРАЩАЕМ ЭТИ КРИТИЧЕСКИ ВАЖНЫЕ НАСТРОЙКИ ---
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android_music", "web"], # Music app client
+                }
+            },
+            "http_headers": {
+                "User-Agent": "com.google.android.apps.youtube.music/6.21.51", # Android Music User-Agent
+                "X-YouTube-Client-Name": "67",  # Music client ID (если потребуется)
+            },
         }
 
         # ПРИМЕНЯЕМ КУКИ К ОБЕИМ КОНФИГУРАЦИЯМ
@@ -97,6 +112,7 @@ class YouTubeDownloader:
             try:
                 res = await asyncio.wait_for(loop.run_in_executor(None, do_search), timeout=25.0)
             except asyncio.TimeoutError:
+                logger.error(f"[YT Search] TIMEOUT for query: '{query}'")
                 return []
             
             results = []
@@ -133,7 +149,7 @@ class YouTubeDownloader:
 
             def do_dl():
                 try:
-                    with yt_dlp.YoutubeDL(self.download_opts) as ydl:
+                    with yt_dlp.YoutubeDL(self.download_opts) as ydl: # Using self.download_opts
                         ydl.download([url])
                     return True
                 except Exception as e:
