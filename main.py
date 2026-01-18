@@ -63,6 +63,7 @@ async def lifespan(app: FastAPI):
         logger.warning("🧠 NLP Engine: INACTIVE (Check Logs/Env)")
 
     settings = get_settings()
+    app.state.settings = settings
     
     # Ensure directories
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
