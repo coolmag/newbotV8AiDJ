@@ -26,7 +26,6 @@ class YouTubeDownloader:
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         
-        # Load cookies
         self.cookies_path = Path("cookies/youtube_railway.txt")
         cookies_content = os.getenv("YT_COOKIES_CONTENT") or os.getenv("COOKIES_CONTENT")
         if cookies_content:
@@ -41,7 +40,6 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(1)
         self.search_semaphore = asyncio.Semaphore(2)
 
-        # Search options
         self.search_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -52,34 +50,34 @@ class YouTubeDownloader:
             "ignoreerrors": True,
         }
 
-        # Check for problematic video IDs
         self.problematic_prefixes = ['--', 'n--', 'ytr', 'yt-']
         
-        # Base options for all downloads
         self.base_ytdlp_opts = {
             "quiet": True,
             "no_warnings": True,
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             "keepvideo": False,
             "socket_timeout": 60,
-            "retries": 20,  # Very aggressive retry
+            "retries": 20,
             "ignoreerrors": True,
             'nocheckcertificate': True,
             "no_color": True,
             "extractor_retries": 3,
             "fragment_retries": 10,
             "skip_unavailable_fragments": True,
-            "keep_fragments": False,
             "hls_prefer_native": True,
-            # "external_downloader": "aria2c",  # Use aria2c if available
-            # "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9",
-            },
         }
 
-        # Apply cookies
+        self.sabr_bypass_extractor_args = {
+            "youtube": {
+                "player_client": ["tv_embedded", "web_creator", "android_music"],
+                "player_skip": ["webpage"],
+            }
+        }
+        self.sabr_bypass_http_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+
         if self.cookies_path.exists():
             self.search_opts['cookiefile'] = str(self.cookies_path)
             self.base_ytdlp_opts['cookiefile'] = str(self.cookies_path)
@@ -93,8 +91,7 @@ class YouTubeDownloader:
         return False
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
-        clean_query = query.lower().strip()
-        search_text = f"{clean_query} audio" if "audio" not in clean_query else clean_query
+        clean_query = query.lower().strip(); search_text = f"{clean_query} audio" if "audio" not in clean_query else clean_query
         cache_key = f"yt_search_nuclear:{clean_query}"
         cached = await self._cache.get(cache_key)
         if cached: return cached
@@ -114,9 +111,7 @@ class YouTubeDownloader:
                 for entry in res.get('entries', []):
                     if not entry: continue
                     video_id = str(entry.get('id', ''))
-                    if self.is_problematic_video_id(video_id):
-                        logger.warning(f"Skipping problematic video in search: {video_id}")
-                        continue
+                    if self.is_problematic_video_id(video_id): continue
                     results.append(TrackInfo(identifier=video_id, title=entry.get('title', 'Unknown'), artist=entry.get('channel', 'Unknown'), duration=int(entry.get('duration') or 0), source=Source.YOUTUBE))
             if results: await self._cache.set(cache_key, results, ttl=3600)
             return results
@@ -124,27 +119,19 @@ class YouTubeDownloader:
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         if not track_info:
             track_info = TrackInfo(identifier=video_id, title="Unknown Track", artist="Web Player", duration=0, source=Source.YOUTUBE)
-
         if self.is_problematic_video_id(video_id):
             return DownloadResult(success=False, error_message=f"Unsupported video ID: {video_id}", track_info=track_info)
 
         cached_file_id = await self._cache.get(f"file_id:{video_id}")
         if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
-
+        
         final_path_mp3 = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         if final_path_mp3.exists() and final_path_mp3.stat().st_size > 10000:
              return DownloadResult(success=True, file_path=final_path_mp3, track_info=track_info)
         
-        download_methods = [self._download_piped_fast, self._download_ytdlp_aggressive, self._download_direct_stream]
-        result = DownloadResult(success=False)
-        for method in download_methods:
-            logger.info(f"Trying download method: {method.__name__} for {video_id}")
-            result = await method(video_id, track_info)
-            if result.success: break
-            await asyncio.sleep(1)
-
-        if not result.success:
-            result = await self._download_any_audio(video_id, track_info)
+        result = await self._download_piped_fast(video_id, track_info)
+        if not result.success: result = await self._download_ytdlp_aggressive(video_id, track_info)
+        if not result.success: result = await self._download_any_audio(video_id, track_info)
         
         if result.success and result.file_path and result.file_path.suffix != ".mp3":
             result = await self._convert_to_mp3(result.file_path, track_info)
@@ -155,30 +142,35 @@ class YouTubeDownloader:
         return result
 
     async def _download_piped_fast(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        # Piped implementation
-        reliable_instances = self._settings.PIPED_INSTANCE_LIST if self._settings.PIPED_INSTANCE_LIST else ["https://pipedapi.kavin.rocks"]
-        random.shuffle(reliable_instances)
+        piped_instances = self._settings.PIPED_INSTANCE_LIST
+        random.shuffle(piped_instances)
         async with httpx.AsyncClient(timeout=15.0, limits=httpx.Limits(max_connections=5), follow_redirects=True) as client:
-            for instance in reliable_instances:
+            for instance in piped_instances:
                 try:
-                    # ... Piped logic from previous versions
-                    return DownloadResult(success=True, file_path=Path("..."), track_info=track_info) # Placeholder
+                    info_resp = await client.get(f"{instance}/streams/{video_id}", timeout=10)
+                    if info_resp.status_code != 200: continue
+                    data = info_resp.json()
+                    if data.get("error"): continue
+                    audio_streams = sorted(data.get("audioStreams",[]), key=lambda x: x.get("bitrate",0), reverse=True)
+                    if not audio_streams: continue
+                    audio_url = audio_streams[0].get("url")
+                    if not audio_url: continue
+                    file_ext = audio_streams[0].get("format", "webm").lower()
+                    file_path = self._settings.DOWNLOADS_DIR / f"{video_id}.{file_ext}"
+                    async with client.stream("GET", audio_url, timeout=30) as response:
+                        response.raise_for_status()
+                        with file_path.open("wb") as f:
+                            async for chunk in response.aiter_bytes(): f.write(chunk)
+                    if file_path.exists() and file_path.stat().st_size > 5000:
+                        return DownloadResult(success=True, file_path=file_path, track_info=track_info)
                 except Exception: continue
         return DownloadResult(success=False, error_message="Fast Piped failed", track_info=track_info)
 
-
     async def _download_ytdlp_aggressive(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        format_strings = ["bestaudio[ext=m4a]/bestaudio/best", "bestaudio[asr=44100]/bestaudio", "best[height<=720]/best"]
-        for fmt in format_strings:
-            opts = {**self.base_ytdlp_opts, "format": fmt, "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-                    "extractor_args": {"youtube": {"player_client": ["tv_embedded", "web_creator"], "player_skip": ["webpage"]}}}
-            result = await self._execute_ytdlp_download(f"https://www.youtube.com/watch?v={video_id}", opts, video_id, track_info)
-            if result.success: return result
-        return DownloadResult(success=False, error_message="Aggressive yt-dlp failed", track_info=track_info)
-
-    async def _download_direct_stream(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        # Direct stream implementation
-        return DownloadResult(success=False, error_message="Direct stream failed", track_info=track_info)
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        opts = {**self.base_ytdlp_opts, "format": "bestaudio/best", "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+                "extractor_args": self.sabr_bypass_extractor_args, "http_headers": self.sabr_bypass_http_headers}
+        return await self._execute_ytdlp_download(url, opts, video_id, track_info)
 
     async def _download_any_audio(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
         opts = {**self.base_ytdlp_opts, "format": "worst", "force_generic_extractor": True}
@@ -192,7 +184,7 @@ class YouTubeDownloader:
                     with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
                     return True
                 except Exception as e:
-                    logger.warning(f"yt-dlp execution failed: {e}")
+                    if "is not a valid URL" not in str(e): logger.warning(f"yt-dlp download error: {e}")
                     return False
             try:
                 if await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=180.0):
