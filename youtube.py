@@ -120,11 +120,10 @@ class YouTubeDownloader:
             return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
 
         # 2. Проверка существующего файла
-        for ext in ['.mp3']: # Only checking for MP3 now, as conversion is guaranteed
-            path = self._settings.DOWNLOADS_DIR / f"{video_id}{ext}"
-            if path.exists() and path.stat().st_size > 1000:
-                logger.info(f"✅ Found existing file: {path.name}")
-                return DownloadResult(success=True, file_path=path, track_info=track_info)
+        final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3" # Check for MP3 specifically
+        if final_path.exists() and final_path.stat().st_size > 1000:
+            logger.info(f"✅ Found existing file: {final_path.name}")
+            return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         # Если track_info нет, создаем заглушку, чтобы код не падал
         if not track_info:
@@ -152,13 +151,8 @@ class YouTubeDownloader:
             success = await asyncio.wait_for(loop.run_in_executor(None, do_dl), timeout=120.0)
 
             if success:
-                final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3" # Expecting MP3
                 if final_path.exists() and final_path.stat().st_size > 1000:
                     logger.info(f"Download successful. Returning result for {video_id}.")
-                    return DownloadResult(
-                        success=True, 
-                        file_path=final_path, 
-                        track_info=track_info 
-                    )
+                    return DownloadResult(success=True, file_path=final_path, track_info=track_info)
             
             return DownloadResult(success=False, error_message="Download failed", track_info=track_info)
