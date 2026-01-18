@@ -44,33 +44,35 @@ class YouTubeDownloader:
         
         self._url_cache: Dict[str, str] = {}
 
-        # ОПЦИИ СМЕРТИ (Исправленная версия)
         self.ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             
-            # ИЗМЕНЕНИЕ 1: Разрешаем любые форматы (yt-dlp сам разберется и сконвертирует)
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+            # --- ГЛАВНОЕ ИЗМЕНЕНИЕ ---
+            # 1. Сначала ищем m4a аудио
+            # 2. Если нет - любое аудио
+            # 3. ЕСЛИ НЕТ АУДИО - качаем видео 480p/360p (самое легкое)
+            # FFmpeg все равно превратит это в MP3
+            "format": "bestaudio[ext=m4a]/bestaudio/best[height<=480]/best",
             
-            # 1. МАСКИРОВКА
+            # --- СМЕНА КЛИЕНТА ---
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "web"],
+                    # Пробуем iOS, он часто отдает форматы, которые скрыты для Android
+                    "player_client": ["ios", "android", "web"],
                     "player_skip": ["webpage", "configs", "js"],
-                    # ИЗМЕНЕНИЕ 2: УБРАЛИ "skip": ["dash", "hls"] 
-                    # Мы обязаны принимать DASH, иначе получаем "No format found"
+                    # УДАЛИЛИ "skip": ["dash", "hls"] — принимаем всё!
                 }
             },
             
-            # 2. АНТИ-ФРИЗ
-            "socket_timeout": 20,
+            "socket_timeout": 30,
             "retries": 10,
             
-            # 3. АНТИ-БАН СКОРОСТИ
-            "ratelimit": 2_500_000, # Чуть подняли лимит
+            # Снижаем скорость, чтобы нас не принимали за DDoS
+            "ratelimit": 5_000_000, 
             "sleep_interval": 2,
             
-            # 4. ОБРАБОТКА (Конвертация в MP3)
+            # Конвертация любого входящего потока (видео или аудио) в MP3
             "postprocessors": [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
