@@ -55,14 +55,24 @@ class YouTubeDownloader:
         self.ytdlp_fallback_opts = {
             "quiet": True,
             "no_warnings": True,
-            "format": "worstaudio/worst",
+            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best", # Greedier format
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
             "keepvideo": False,
             "socket_timeout": 30,
-            "retries": 3,
+            "retries": 10, # More retries for fallback
             "ignoreerrors": True,
             'nocheckcertificate': True,
+            # --- ADD THESE CRITICAL SETTINGS ---
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android_music", "web"], # Music app client
+                }
+            },
+            "http_headers": {
+                "User-Agent": "com.google.android.apps.youtube.music/6.21.51", # Android Music User-Agent
+                "X-YouTube-Client-Name": "67",  # Music client ID
+            },
         }
 
         # ПРИМЕНЯЕМ КУКИ К ОБЕИМ КОНФИГУРАЦИЯМ
