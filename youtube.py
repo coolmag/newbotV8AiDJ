@@ -16,10 +16,11 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    ADAPTER: RAILWAY 'PIPED' FINAL STABLE (2026)
-    - Piped API с настраиваемым списком инстансов.
-    - Резервный метод через yt-dlp.
-    - Корректная обработка track_info для предотвращения ошибок.
+    ADAPTER: RAILWAY 'HYBRID' STABLE (2026) - The True Final Version
+    - Piped API fallback.
+    - Correct track_info propagation.
+    - Defensive track_info creation for web player.
+    - COOKIES APPLIED TO FALLBACK DOWNLOADER.
     """
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
@@ -33,7 +34,7 @@ class YouTubeDownloader:
                 self.cookies_path.parent.mkdir(exist_ok=True)
                 with open(self.cookies_path, "w", encoding="utf-8") as f:
                     f.write(cookies_content)
-                logger.info("🍪 Cookies loaded and prepared for SEARCH.")
+                logger.info("🍪 Cookies loaded and prepared.")
             except Exception as e:
                 logger.error(f"Failed to write cookies: {e}")
 
@@ -49,11 +50,7 @@ class YouTubeDownloader:
             "socket_timeout": 20,
             "retries": 3,
         }
-        if self.cookies_path.exists():
-            self.search_opts['cookiefile'] = str(self.cookies_path)
-            self.ytdlp_fallback_opts['cookiefile'] = str(self.cookies_path)
-            logger.info("Cookie file applied to both SEARCH and FALLBACK configs.")
-            
+        
         # Опции для резервного скачивания
         self.ytdlp_fallback_opts = {
             "quiet": True,
@@ -67,7 +64,14 @@ class YouTubeDownloader:
             "ignoreerrors": True,
             'nocheckcertificate': True,
         }
-        logger.info("🟢 YouTube 'Piped' Engine initialized.")
+
+        # ПРИМЕНЯЕМ КУКИ К ОБЕИМ КОНФИГУРАЦИЯМ
+        if self.cookies_path.exists():
+            self.search_opts['cookiefile'] = str(self.cookies_path)
+            self.ytdlp_fallback_opts['cookiefile'] = str(self.cookies_path) # THE FIX IS HERE
+            logger.info("Cookie file applied to both SEARCH and FALLBACK configs.")
+
+        logger.info("🟢 YouTube 'Hybrid' Engine initialized.")
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         clean_query = query.lower().strip()
@@ -81,8 +85,7 @@ class YouTubeDownloader:
             loop = asyncio.get_running_loop()
             def do_search():
                 with yt_dlp.YoutubeDL(self.search_opts) as ydl:
-                    try:
-                        return ydl.extract_info(f"ytsearch{limit}:{search_text}", download=False)
+                    try: return ydl.extract_info(f"ytsearch{limit}:{search_text}", download=False)
                     except Exception: return None
             try:
                 res = await asyncio.wait_for(loop.run_in_executor(None, do_search), timeout=25.0)
@@ -102,7 +105,6 @@ class YouTubeDownloader:
             return results
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
-        # FIX FOR WEB PLAYER & AttributeError: If called without track_info, create a stub.
         if not track_info:
             track_info = TrackInfo(identifier=video_id, title="Unknown Track", artist="Web Player", duration=0, source=Source.YOUTUBE)
 
@@ -114,29 +116,24 @@ class YouTubeDownloader:
         if mp3_path.exists() and mp3_path.stat().st_size > 20000:
             return DownloadResult(success=True, file_path=mp3_path, track_info=track_info)
         
-        # Попытка №1: Piped
         result = await self._download_piped(video_id, track_info)
         
-        # Попытка №2: yt-dlp fallback
         if not result.success:
             result = await self._download_ytdlp_minimal(video_id, track_info)
         
         if not result.success:
             return result
 
-        # Попытка №3: Конвертация в MP3
         if result.file_path and result.file_path.suffix != ".mp3":
             result = await self._run_ffmpeg_postprocessor(result.file_path, track_info)
 
-        # "Scorched Earth" Fix:
         if result.success:
             return DownloadResult(
                 success=True,
                 file_path=result.file_path,
                 file_id=result.file_id,
-                track_info=track_info 
+                track_info=track_info
             )
-        
         return result
 
     async def _download_piped(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult:
@@ -177,7 +174,9 @@ class YouTubeDownloader:
                     with yt_dlp.YoutubeDL(self.ytdlp_fallback_opts) as ydl:
                         ydl.download([url])
                     return True
-                except Exception: return False
+                except Exception as e:
+                    logger.error(f"yt-dlp fallback Download Error '{video_id}': {e}", exc_info=True)
+                    return False
             success = await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=90.0)
             if success:
                 return await self._wait_for_file(video_id, track_info)
@@ -195,7 +194,8 @@ class YouTubeDownloader:
                 except OSError: pass
                 return DownloadResult(success=True, file_path=output_path, track_info=track_info)
             return DownloadResult(success=False, error_message="FFmpeg conversion failed", track_info=track_info)
-        except Exception:
+        except Exception as e:
+            logger.error(f"FFmpeg execution error: {e}", exc_info=True)
             return DownloadResult(success=False, error_message="FFmpeg execution error", track_info=track_info)
 
     async def _wait_for_file(self, video_id: str, track_info: Optional[TrackInfo]) -> DownloadResult:
