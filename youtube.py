@@ -6,7 +6,6 @@ import random
 import time
 from pathlib import Path
 from typing import List, Optional, Dict
-import httpx # Still needed for search, but not for download anymore
 import yt_dlp
 from config import Settings
 from models import DownloadResult, Source, TrackInfo
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    ADAPTER: RAILWAY 'YT-DLP DIRECT' FINAL (2026) - Simplified
+    ADAPTER: RAILWAY 'YT-DLP DIRECT' FINAL (2026) - Simplified & Stable
     - Прямое скачивание через yt-dlp с оптимизированными настройками.
     - Поиск с куками.
     - Исправлена логика передачи TrackInfo.
@@ -58,7 +57,7 @@ class YouTubeDownloader:
         clean_query = query.lower().strip()
         if "audio" not in clean_query: search_text = f"{clean_query} audio"
         else: search_text = clean_query
-        cache_key = f"yt_search_direct:{clean_query}" # Changed cache key
+        cache_key = f"yt_search_direct:{clean_query}"
         cached = await self._cache.get(cache_key)
         if cached: return cached
         
@@ -68,7 +67,7 @@ class YouTubeDownloader:
                 with yt_dlp.YoutubeDL(self.search_opts) as ydl:
                     try:
                         return ydl.extract_info(f"ytsearch{limit}:{search_text}", download=False)
-                    except Exception as e: # Add logging here
+                    except Exception as e:
                         logger.error(f"Search Error: {e}", exc_info=True)
                         return None
             try:
@@ -100,13 +99,12 @@ class YouTubeDownloader:
             return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
 
         # 2. Проверка существующего файла
-        for ext in ['.mp3', '.m4a', '.webm', '.opus']:
+        for ext in ['.mp3']:
             path = self._settings.DOWNLOADS_DIR / f"{video_id}{ext}"
             if path.exists() and path.stat().st_size > 1000:
                 logger.info(f"✅ Found existing file: {path.name}")
                 return DownloadResult(success=True, file_path=path, track_info=track_info)
 
-        # 3. Скачивание (Прямое через yt-dlp)
         # Если track_info нет, создаем заглушку, чтобы код не падал
         if not track_info:
             track_info = TrackInfo(
@@ -136,6 +134,8 @@ class YouTubeDownloader:
                 "retries": 10,
                 "ignoreerrors": True,
             }
+            if self.cookies_path.exists():
+                opts['cookiefile'] = str(self.cookies_path)
 
             url = f"https://www.youtube.com/watch?v={video_id}"
             loop = asyncio.get_running_loop()
@@ -149,18 +149,16 @@ class YouTubeDownloader:
                     logger.error(f"DL Error: {e}", exc_info=True)
                     return False
 
-            success = await asyncio.wait_for(loop.run_in_executor(None, do_dl), timeout=120.0)
+            success = await loop.run_in_executor(None, do_dl)
 
             if success:
-                # Ищем скачанный файл (MP3 или исходник)
-                for ext in ['.mp3', '.m4a', '.webm', '.opus']:
-                    final_path = self._settings.DOWNLOADS_DIR / f"{video_id}{ext}"
-                    if final_path.exists() and final_path.stat().st_size > 1000:
-                        logger.info(f"Download successful. Returning result for {video_id}.")
-                        return DownloadResult(
-                            success=True, 
-                            file_path=final_path, 
-                            track_info=track_info 
-                        )
+                final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
+                if final_path.exists() and final_path.stat().st_size > 1000:
+                    logger.info(f"Download successful. Returning result for {video_id}.")
+                    return DownloadResult(
+                        success=True, 
+                        file_path=final_path, 
+                        track_info=track_info 
+                    )
             
             return DownloadResult(success=False, error_message="Download failed", track_info=track_info)
