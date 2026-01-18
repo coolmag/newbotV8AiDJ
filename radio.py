@@ -112,10 +112,10 @@ class RadioSession:
             except Exception as e:
                 logger.error(f"Search error for {q}: {e}")
         
+        # The fallback to get_random_cached_tracks was removed as it's no longer supported by the new downloader.
+        # The main search logic is now considered robust enough.
         if not found_new:
-            if not self.playlist:
-                cached = await self.downloader.get_random_cached_tracks(limit=10)
-                if cached: self.playlist.extend(cached)
+            logger.warning(f"[{self.chat_id}] No new tracks found for query '{base_query}' and no fallback is available.")
             
         self._is_searching = False
 
@@ -167,17 +167,23 @@ class RadioSession:
                 elif result.file_path:
                     with open(result.file_path, 'rb') as f:
                         msg = await self.bot.send_audio(self.chat_id, audio=f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
-                        if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
+                        # Manually cache the file_id using the downloader's cache service
+                        if msg.audio:
+                            await self.downloader._cache.set(f"file_id:{track.identifier}", msg.audio.file_id, ttl=None)
             except Forbidden: await self._handle_forbidden(); return False
             except Exception as e:
-                if result and result.file_id: # Проверка result
-                    await self.downloader.invalidate_cache(track.identifier)
-                    await self._update_status(f"🔄 Перекачиваю: *{track.title}*...")
+                logger.warning(f"Failed to send audio for {track.identifier}: {e}. Invalidating cache if possible.")
+                if result and result.file_id: # If sending by file_id failed
+                    # Invalidate the cache and re-download
+                    await self.downloader._cache.delete(f"file_id:{track.identifier}")
+                    await self._update_status(f"🔄 Файл поврежден, перекачиваю: *{track.title}*...")
                     result = await self.downloader.download(track.identifier, track_info=track)
                     if result.success and result.file_path:
                          with open(result.file_path, 'rb') as f:
                              msg = await self.bot.send_audio(self.chat_id, audio=f, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
-                             if msg.audio: await self.downloader.cache_file_id(track.identifier, msg.audio.file_id)
+                             # Manually cache the new file_id
+                             if msg.audio:
+                                 await self.downloader._cache.set(f"file_id:{track.identifier}", msg.audio.file_id, ttl=None)
                          return True
                 return False
             

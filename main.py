@@ -132,12 +132,20 @@ async def ai_dj_generate(prompt: str, request: Request):
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
     downloader = request.app.state.downloader
-    path = downloader._find_downloaded_file(video_id)
-    if not path:
-        res = await downloader.download(video_id)
-        if res.success: path = res.file_path
+    found_path = None
+    settings = request.app.state.settings
+    for ext in ['.mp3', '.m4a', '.webm']:
+        existing_path = settings.DOWNLOADS_DIR / f"{video_id}{ext}"
+        if existing_path.exists() and existing_path.stat().st_size > 50000:
+            found_path = existing_path
+            break
     
-    if path: return FileResponse(path)
+    if not found_path:
+        res = await downloader.download(video_id)
+        if res.success:
+            found_path = res.file_path
+    
+    if found_path: return FileResponse(found_path)
     return JSONResponse(status_code=404, content={"error": "File not found"})
 
 @app.get("/api/health")
