@@ -14,48 +14,49 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    ADAPTER: YOUTUBE RESURRECTED (2026 Edition)
-    - Использует маскировку под Android Client для обхода PO Token.
-    - Жесткие таймауты, чтобы бот не вис.
-    - OAuth2 для авторизации (опционально, но рекомендуется).
+    ADAPTER: YOUTUBE HYBRID (Android Client + Timeouts)
+    Исправляет зависания и обходит базовые блокировки 2025-2026.
     """
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         
-        # ВАЖНО: Снижаем конкурентность. 5 потоков с одного IP = мгновенный бан от YouTube.
-        # Лучше качать по 2 трека, но стабильно, чем 5 и получить бан.
-        self.semaphore = asyncio.Semaphore(2) 
+        # Снижаем нагрузку. 2 потока — потолок для облачных IP.
+        self.semaphore = asyncio.Semaphore(2)
         self.search_semaphore = asyncio.Semaphore(2)
-
+        
         self._url_cache: Dict[str, str] = {}
         
-        # Опции "Анти-Блок"
+        # Путь к кукам (создай папку cookies рядом с ботом и положи туда файл)
+        # Если файла нет — бот просто попробует работать без них.
+        self.cookies_path = Path("cookies/youtube.txt")
+
         self.ydl_opts = {
             "quiet": True,
             "no_warnings": True,
+            # Важно! Формат bestaudio часто лучше чем конкретный mp3 для скорости
             "format": "bestaudio/best",
             
-            # --- ГЛАВНЫЕ ФИШКИ ОБХОДА 2025-2026 ---
+            # --- ГЛАВНЫЙ ФИКС ЗАВИСАНИЙ ---
+            "socket_timeout": 15,        # Если нет ответа 15 сек — обрыв
+            "retries": 5,                # Пробуем 5 раз
+            "fragment_retries": 5,       # Если кусок видео не скачался
             
-            # 1. Притворяемся Android-клиентом (он реже требует PO Token для аудио)
-            # Варианты: 'android', 'web', 'ios'. Android сейчас самый стабильный для аудио.
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web'],
-                    'skip': ['hls', 'dash'], # Пропускаем потоковые форматы, которые часто троттлят
+            # --- ГЛАВНЫЙ ФИКС БЛОКИРОВОК (Android Client) ---
+            "extractor_args": {
+                "youtube": {
+                    # Притворяемся Android-приложением (самый живучий метод сейчас)
+                    "player_client": ["android", "web"],
+                    "player_skip": ["webpage", "configs", "js"],
+                    "skip": ["dash", "hls"], # Пропуск потоковых форматов (часто виснут)
                 }
             },
             
-            # 2. Таймауты (чтобы бот не вис намертво)
-            'socket_timeout': 15,
-            'retries': 3,
-            
-            # 3. Анти-детект заголовки
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept-Language': 'en-US,en;q=0.9',
+            # --- АНТИ-ДЕТЕКТ ЗАГОЛОВКИ (Как у Android телефона) ---
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.105 Mobile Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
             },
 
             "postprocessors": [{
@@ -66,24 +67,28 @@ class YouTubeDownloader:
             "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             'nocheckcertificate': True,
             'ignoreerrors': True,
-            
-            # Если сервер забанен, раскомментируй строку ниже и используй прокси
-            # 'proxy': 'http://user:pass@host:port', 
         }
         
-        logger.info("🟢 YouTube Resurrected Engine initialized")
+        # Подключаем куки, если файл существует
+        if self.cookies_path.exists():
+            self.ydl_opts['cookiefile'] = str(self.cookies_path)
+            logger.info(f"🍪 Cookies loaded from {self.cookies_path}")
+        else:
+            logger.warning("⚠️ Running WITHOUT cookies. Consider adding cookies/youtube.txt for better stability.")
+
+        logger.info("🟢 YouTube Hybrid Engine initialized")
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
-        """Поиск через ytsearch (возвращаемся к истокам)."""
+        """Быстрый поиск через ytsearch с таймаутом."""
         clean_query = query.lower().strip()
         
-        # Добавляем "Audio" к запросу, чтобы yt-dlp искал музыку, а не клипы
+        # Хак: добавляем "audio", если ищем не клип
         if "audio" not in clean_query and "lyrics" not in clean_query:
             search_text = f"{clean_query} audio"
         else:
             search_text = clean_query
 
-        cache_key = f"yt_search_v2:{clean_query}"
+        cache_key = f"yt_search_v3:{clean_query}"
         cached = await self._cache.get(cache_key)
         if cached: return cached
 
@@ -91,17 +96,26 @@ class YouTubeDownloader:
             loop = asyncio.get_running_loop()
             
             def do_search():
-                # Используем ytsearch вместо scsearch
+                # ytsearchN: возвращает N результатов
                 search_query = f"ytsearch{limit}:{search_text}"
-                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                
+                # Копируем опции и включаем flat_playlist для скорости (не качаем данные видео)
+                opts = self.ydl_opts.copy()
+                opts['extract_flat'] = True 
+                
+                with yt_dlp.YoutubeDL(opts) as ydl:
                     try:
-                        # flat_playlist=True ускоряет поиск в 10 раз (не получает полные данные видео сразу)
                         return ydl.extract_info(search_query, download=False)
                     except Exception as e:
-                        logger.error(f"YT Search Error: {e}")
+                        logger.error(f"Search Error: {e}")
                         return None
 
-            res = await loop.run_in_executor(None, do_search)
+            try:
+                # Обертка в wait_for, чтобы поиск не вешал бота
+                res = await asyncio.wait_for(loop.run_in_executor(None, do_search), timeout=20.0)
+            except asyncio.TimeoutError:
+                logger.error(f"Search timed out for: {query}")
+                return []
             
             results = []
             if res and 'entries' in res:
@@ -109,46 +123,40 @@ class YouTubeDownloader:
                     if not entry: continue
                     
                     tid = str(entry.get('id', ''))
-                    if not tid: continue
+                    title = entry.get('title', 'Unknown')
                     
-                    # При flat_playlist duration может не быть, но это цена скорости
-                    duration = int(entry.get('duration', 0))
+                    # При extract_flat=True длительность иногда может быть None
+                    duration = int(entry.get('duration') or 0)
                     
-                    # Фильтр на "слишком длинные миксы" или "слишком короткие звуки"
-                    # Если duration 0 (из-за flat поиска), пропускаем проверку
-                    if duration > 0 and (duration < 45 or duration > 1200):
+                    # Базовая фильтрация мусора
+                    if duration > 0 and (duration < 30 or duration > 1200):
                         continue
-                    
-                    # Формируем полную ссылку сразу
-                    url = f"https://www.youtube.com/watch?v={tid}"
-                    self._url_cache[tid] = url
-
+                        
                     results.append(TrackInfo(
                         identifier=tid,
-                        title=entry.get('title', 'Unknown'),
-                        artist=entry.get('channel', 'Unknown Artist'), # uploader -> channel
+                        title=title,
+                        artist=entry.get('channel', 'Unknown'), # uploader -> channel
                         duration=duration,
                         source=Source.YOUTUBE,
-                        thumbnail_url=entry.get('thumbnail', None)
+                        thumbnail_url=None # При flat поиске тамбнейла может не быть сразу
                     ))
 
             if results:
                 await self._cache.set(cache_key, results, ttl=3600)
             
-            logger.info(f"[YT] Search '{query}': {len(results)} tracks found")
             return results
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         video_id = str(video_id)
         
-        # 1. Проверка кэша file_id (без изменений)
+        # 1. Кэш ID
         file_id_cache_key = f"file_id:{video_id}"
         cached_file_id = await self._cache.get(file_id_cache_key)
         if cached_file_id:
             return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
 
-        # 2. Проверка файла (без изменений)
-        for ext in ['.mp3', '.m4a', '.webm']: # ogg убрал, редкость
+        # 2. Файл на диске
+        for ext in ['.mp3', '.m4a', '.webm']:
             existing = self._settings.DOWNLOADS_DIR / f"{video_id}{ext}"
             if existing.exists() and existing.stat().st_size > 50000:
                 return DownloadResult(success=True, file_path=existing, track_info=track_info)
@@ -161,8 +169,8 @@ class YouTubeDownloader:
             
             def do_download():
                 try:
+                    # Важно: создаем новый экземпляр опций для каждого скачивания
                     opts = self.ydl_opts.copy()
-                    # Убеждаемся, что имя файла будет ID (важно для ffmpeg)
                     opts['outtmpl'] = str(self._settings.DOWNLOADS_DIR / f"{video_id}.%(ext)s")
                     
                     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -172,20 +180,22 @@ class YouTubeDownloader:
                     logger.error(f"Download Error {video_id}: {e}")
                     return False
 
-            success = await loop.run_in_executor(None, do_download)
+            try:
+                # Ждем скачивания максимум 60 секунд, иначе убиваем процесс
+                success = await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=60.0)
+            except asyncio.TimeoutError:
+                logger.error(f"Download TIMEOUT for {video_id}")
+                return DownloadResult(success=False, error_message="Download timed out (ghosting)", track_info=track_info)
             
             if not success:
-                return DownloadResult(success=False, error_message="YT Download Failed", track_info=track_info)
+                return DownloadResult(success=False, error_message="Download Failed", track_info=track_info)
 
-            # 4. Ожидание файла (чуть уменьшил таймаут, 45 сек это долго)
+            # 4. Проверка результата
             start_wait = time.time()
-            while time.time() - start_wait < 30:
-                for path in self._settings.DOWNLOADS_DIR.glob(f"{video_id}.*"): # Точный поиск по ID
+            while time.time() - start_wait < 10: # Ждем конвертации FFmpeg
+                for path in self._settings.DOWNLOADS_DIR.glob(f"{video_id}.*"):
                     if path.is_file() and path.stat().st_size > 50000:
-                        logger.info(f"[YT] Downloaded: {path.name}")
                         return DownloadResult(success=True, file_path=path, track_info=track_info)
                 await asyncio.sleep(1)
             
-            return DownloadResult(success=False, error_message="File lost after download", track_info=track_info)
-
-    # ... остальные методы (cache_file_id, get_random...) без изменений ...
+            return DownloadResult(success=False, error_message="File lost", track_info=track_info)
