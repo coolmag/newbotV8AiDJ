@@ -44,31 +44,33 @@ class YouTubeDownloader:
         
         self._url_cache: Dict[str, str] = {}
 
-        # ОПЦИИ СМЕРТИ (То, что пробивает защиту 2026)
+        # ОПЦИИ СМЕРТИ (Исправленная версия)
         self.ydl_opts = {
             "quiet": True,
             "no_warnings": True,
-            "format": "bestaudio/best",
             
-            # 1. МАСКИРОВКА (Android API - самое стабильное)
+            # ИЗМЕНЕНИЕ 1: Разрешаем любые форматы (yt-dlp сам разберется и сконвертирует)
+            "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+            
+            # 1. МАСКИРОВКА
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "web"], # Android главный
-                    "player_skip": ["webpage", "configs", "js"], # Не грузим мусор
-                    "skip": ["dash", "hls"], # Избегаем троттлинга
+                    "player_client": ["android", "web"],
+                    "player_skip": ["webpage", "configs", "js"],
+                    # ИЗМЕНЕНИЕ 2: УБРАЛИ "skip": ["dash", "hls"] 
+                    # Мы обязаны принимать DASH, иначе получаем "No format found"
                 }
             },
             
-            # 2. АНТИ-ФРИЗ (Чтобы бот не зависал)
+            # 2. АНТИ-ФРИЗ
             "socket_timeout": 20,
             "retries": 10,
             
             # 3. АНТИ-БАН СКОРОСТИ
-            # Важно для Railway: качаем медленно, но уверенно
-            "ratelimit": 2_000_000, # 2MB/s макс
-            "sleep_interval": 3,    # Пауза между запросами видео
+            "ratelimit": 2_500_000, # Чуть подняли лимит
+            "sleep_interval": 2,
             
-            # 4. ОБРАБОТКА
+            # 4. ОБРАБОТКА (Конвертация в MP3)
             "postprocessors": [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
