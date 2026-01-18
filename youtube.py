@@ -15,19 +15,18 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    ADAPTER: RAILWAY 'OMNIVORE' EDITION (2026)
-    Принцип 'Пылесос': берем любой формат (WebM/Opus/M4A) и конвертируем в MP3.
-    Решает проблему 'Requested format is not available'.
+    ADAPTER: RAILWAY 'DUAL-CONFIG' EDITION (2026)
+    - Раздельные конфиги для поиска и скачивания.
+    - Принудительный generic extractor для обхода бана скачивания.
     """
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         
-        # --- COOKIES (Работают, не трогаем) ---
+        # --- COOKIES ---
         self.cookies_path = Path("cookies/youtube_railway.txt")
         cookies_content = os.getenv("YT_COOKIES_CONTENT") or os.getenv("COOKIES_CONTENT")
-        
         if cookies_content:
             try:
                 self.cookies_path.parent.mkdir(exist_ok=True)
@@ -40,61 +39,63 @@ class YouTubeDownloader:
         self.semaphore = asyncio.Semaphore(1) 
         self.search_semaphore = asyncio.Semaphore(2)
         
-        self._url_cache: Dict[str, str] = {}
-
-        # --- КОНФИГУРАЦИЯ ИЗ СОВЕТОВ "АРХИТЕКТОРОВ" ---
-        self.ydl_opts = {
+        # --- ОПЦИИ ДЛЯ ПОИСКА (Работают, минимум изменений) ---
+        self.search_opts = {
             "quiet": True,
             "no_warnings": True,
-            
-            # 1. ФОРМАТ: Самая важная часть.
-            # Мы просим: "Дай WebM, или M4A, или Opus, или AAC, или вообще хоть что-то"
-            "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio[acodec=opus]/bestaudio/best",
-            
-            # 2. ОТКЛЮЧЕНИЕ ПРОВЕРОК (Чтобы не падало заранее)
-            "ignore_no_formats_error": True,
-            # "check_formats": False, # This option is invalid in yt-dlp, and can cause errors.
-            
-            # 3. КЛИЕНТЫ: iOS и Android сейчас самые живые
+            "extract_flat": True,
+            "skip_download": True,
+            "socket_timeout": 20,
+            "retries": 3,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["ios", "android", "web"],
-                    "player_skip": ["webpage", "configs", "js"],
+                    "player_client": ["ios", "web"],
                 }
             },
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            },
+        }
+
+        # --- ОПЦИИ ДЛЯ СКАЧИВАНИЯ (Агрессивные, с fallback) ---
+        self.download_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best[height<=480]/best",
             
-            # 4. КОНВЕРТАЦИЯ В MP3 (Обязательно!)
-            # Поскольку мы разрешили качать WebM/Opus, их надо превратить в MP3 для Телеграма
+            # --- ГЛАВНЫЙ ФИКС 2026 ---
+            # Заставляем yt-dlp использовать универсальный экстрактор, а не специализированный под YouTube,
+            # что обходит ошибку "No video formats found" при невалидных для скачивания куках.
+            "force_generic_extractor": True,
+            
+            "ignore_no_formats_error": True,
             "postprocessors": [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            
-            # Настройки сети для Railway
-            "socket_timeout": 30,
+            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
+            "socket_timeout": 45,
             "retries": 10,
             "fragment_retries": 10,
-            
-            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             'nocheckcertificate': True,
-            'ignoreerrors': True,
         }
         
+        # Применяем куки к обоим конфигам, если они есть
         if self.cookies_path.exists():
-            self.ydl_opts['cookiefile'] = str(self.cookies_path)
+            self.search_opts['cookiefile'] = str(self.cookies_path)
+            self.download_opts['cookiefile'] = str(self.cookies_path)
 
-        logger.info("🟢 YouTube 'Omnivore' Engine initialized")
+        logger.info("🟢 YouTube 'Dual-Config' Engine initialized")
 
     async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
         clean_query = query.lower().strip()
-        # Добавляем "audio" для точности, если это не прямой поиск
         if "audio" not in clean_query:
             search_text = f"{clean_query} audio"
         else:
             search_text = clean_query
 
-        cache_key = f"yt_search_omni:{clean_query}"
+        cache_key = f"yt_search_dual_config:{clean_query}"
         cached = await self._cache.get(cache_key)
         if cached: return cached
 
@@ -102,14 +103,12 @@ class YouTubeDownloader:
             loop = asyncio.get_running_loop()
             
             def do_search():
-                opts = self.ydl_opts.copy()
-                opts['extract_flat'] = True # Быстрый поиск
-                
-                with yt_dlp.YoutubeDL(opts) as ydl:
+                # ИСПОЛЬЗУЕМ ОПЦИИ ДЛЯ ПОИСКА
+                with yt_dlp.YoutubeDL(self.search_opts) as ydl:
                     try:
                         return ydl.extract_info(f"ytsearch{limit}:{search_text}", download=False)
                     except Exception as e:
-                        logger.error(f"Search Error: {e}")
+                        logger.error(f"Search Error: {e}", exc_info=True)
                         return None
 
             try:
@@ -143,7 +142,6 @@ class YouTubeDownloader:
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         video_id = str(video_id)
         
-        # Кэш ID и файлов
         file_id_cache_key = f"file_id:{video_id}"
         cached_file_id = await self._cache.get(file_id_cache_key)
         if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
@@ -156,23 +154,20 @@ class YouTubeDownloader:
         url = f"https://www.youtube.com/watch?v={video_id}"
 
         async with self.semaphore:
-            logger.info(f"[YT] Downloading: {video_id}")
+            logger.info(f"[YT] Downloading with 'Dual-Config': {video_id}")
             loop = asyncio.get_running_loop()
             
             def do_download():
                 try:
-                    opts = self.ydl_opts.copy()
-                    opts['outtmpl'] = str(self._settings.DOWNLOADS_DIR / f"{video_id}.%(ext)s")
-                    
-                    with yt_dlp.YoutubeDL(opts) as ydl:
+                    # ИСПОЛЬЗУЕМ ОПЦИИ ДЛЯ СКАЧИВАНИЯ
+                    with yt_dlp.YoutubeDL(self.download_opts) as ydl:
                         ydl.download([url])
                     return True
                 except Exception as e:
-                    logger.error(f"Download Error {video_id}: {e}")
+                    logger.error(f"Download Error {video_id}: {e}", exc_info=True)
                     return False
 
             try:
-                # Даем 2 минуты на скачивание и конвертацию
                 success = await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=120.0)
             except asyncio.TimeoutError:
                 return DownloadResult(success=False, error_message="Timeout", track_info=track_info)
@@ -180,15 +175,12 @@ class YouTubeDownloader:
             if not success:
                 return DownloadResult(success=False, error_message="Download Failed", track_info=track_info)
 
-            # Ждем файл. Важно искать MP3, так как FFmpeg должен был отработать
             start_wait = time.time()
             while time.time() - start_wait < 15:
-                # Ищем в первую очередь MP3, так как мы просили конвертацию
                 mp3_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
                 if mp3_path.exists() and mp3_path.stat().st_size > 50000:
                     return DownloadResult(success=True, file_path=mp3_path, track_info=track_info)
                 
-                # Если конвертация не удалась, но есть исходник - отдаем его
                 for path in self._settings.DOWNLOADS_DIR.glob(f"{video_id}.*"):
                     if path.is_file() and path.stat().st_size > 50000:
                         return DownloadResult(success=True, file_path=path, track_info=track_info)
