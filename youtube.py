@@ -2,7 +2,8 @@ import asyncio
 import logging
 import random
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+import time
 
 import httpx
 import yt_dlp
@@ -16,97 +17,116 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🛡️ Titanium Downloader v14 (Final).
-    Features:
-    - Invidious Proxying (local=true) -> Bypasses IP bans 100%.
-    - Smart PO Token Injection -> Fixes Direct Download.
-    - Browser Headers -> Fixes Cobalt API.
-    - Full Debug Logging.
+    🛡️ Titanium Downloader v16 - Full Logging + Cobalt First
     """
+    
+    # Working instances (January 2025)
+    COBALT_INSTANCES = [
+        "https://api.cobalt.tools",
+        "https://cobalt-api.ayo.tf",
+        "https://co.eepy.today",
+    ]
+    
+    PIPED_INSTANCES = [
+        "https://pipedapi.kavin.rocks",
+        "https://pipedapi.adminforge.de", 
+        "https://api.piped.yt",
+        "https://pipedapi.r4fo.com",
+    ]
+    
+    INVIDIOUS_INSTANCES = [
+        "https://invidious.private.coffee",
+        "https://yewtu.be",
+        "https://inv.tux.pizza",
+        "https://invidious.jing.rocks",
+    ]
     
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         
+        # Blacklist for failed instances (url -> timestamp)
+        self._blacklist: Dict[str, float] = {}
+        
         # Setup cookies
         self.cookies_path = self._settings.COOKIES_FILE
         if self._settings.COOKIES_CONTENT:
             try:
-                # Use open/write for compatibility
-                with open(self.cookies_path, "w", encoding="utf-8") as f:
-                    f.write(self._settings.COOKIES_CONTENT)
+                self.cookies_path.write_text(self._settings.COOKIES_CONTENT, encoding="utf-8")
                 logger.info("🍪 Cookies file created")
             except Exception as e:
                 logger.error(f"Failed to write cookies: {e}")
 
-        # Load proxies
+        # Load SOCKS5 proxies only
         self.proxies: List[str] = []
-        self._load_proxies()
-
+        if self._settings.PROXY_URL:
+            self.proxies.append(self._settings.PROXY_URL)
+        if self._settings.PROXIES_FILE.exists():
+            try:
+                for line in self._settings.PROXIES_FILE.read_text().splitlines():
+                    p = line.strip()
+                    if p and "socks5://" in p:
+                        self.proxies.append(p)
+            except:
+                pass
+        random.shuffle(self.proxies)
+        self.proxies = self.proxies[:10]
+        
+        # Merge with config
+        self.cobalt_list = list(set(
+            (self._settings.COBALT_INSTANCES or []) + self.COBALT_INSTANCES
+        ))
+        self.piped_list = list(set(
+            (self._settings.PIPED_INSTANCES or []) + self.PIPED_INSTANCES
+        ))
+        self.invidious_list = list(set(
+            (self._settings.INVIDIOUS_INSTANCES or []) + self.INVIDIOUS_INSTANCES
+        ))
+        
         self.semaphore = asyncio.Semaphore(self._settings.MAX_CONCURRENT_DOWNLOADS)
         
         # Log status
-        po_status = "✅ YES" if self._settings.PO_TOKEN else "❌ NO"
-        
-        logger.info(f"🛡️ Titanium v14 initialized")
-        logger.info(f"   PO_TOKEN: {po_status}")
-        logger.info(f"   Proxies loaded: {len(self.proxies)}")
-        logger.info(f"   Cobalt: {len(self._settings.COBALT_INSTANCES or [])}")
-        logger.info(f"   Invidious: {len(self._settings.INVIDIOUS_INSTANCES or [])}")
+        po = "✅" if self._settings.PO_TOKEN else "❌"
+        logger.info(f"🛡️ Titanium v16 initialized")
+        logger.info(f"   PO_TOKEN: {po}")
+        logger.info(f"   Cobalt: {len(self.cobalt_list)}")
+        logger.info(f"   Piped: {len(self.piped_list)}")
+        logger.info(f"   Invidious: {len(self.invidious_list)}")
+        logger.info(f"   Proxies: {len(self.proxies)}")
 
-    def _load_proxies(self):
-        """Load proxies"""
-        if self._settings.PROXY_URL:
-            self.proxies.append(self._settings.PROXY_URL)
-            
-        if self._settings.PROXIES_FILE.exists():
-            try:
-                with open(self._settings.PROXIES_FILE, "r") as f:
-                    for line in f:
-                        p = line.strip()
-                        # Prefer HTTP/HTTPS/SOCKS5
-                        if p and "://" in p:
-                            if p not in self.proxies:
-                                self.proxies.append(p)
-            except Exception as e:
-                logger.error(f"Failed to load proxies: {e}")
-                
-        random.shuffle(self.proxies)
+    def _is_blacklisted(self, url: str) -> bool:
+        """Check if instance is temporarily blacklisted"""
+        if url in self._blacklist:
+            if time.time() - self._blacklist[url] < 300: # 5 min ban
+                return True
+            del self._blacklist[url]
+        return False
 
-    def _build_extractor_args(self) -> dict:
-        """Build YouTube extractor args with PO Token"""
-        args = {
-            'player_client': ['android_creator', 'web_creator', 'ios'],
-            'player_skip': ['webpage', 'configs']
-        }
-        
-        if self._settings.PO_TOKEN:
-            po_token = self._settings.PO_TOKEN
-            if '+' not in po_token:
-                po_token = f"web+{po_token}"
-            args['po_token'] = [po_token]
-        
-        if self._settings.VISITOR_DATA:
-            args['visitor_data'] = [self._settings.VISITOR_DATA]
-            
-        return args
+    def _blacklist_instance(self, url: str):
+        """Temporarily blacklist an instance"""
+        self._blacklist[url] = time.time()
+        logger.debug(f"Blacklisted: {url}")
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
-        cache_key = f"yt_search_v5:{query}"
+        """Search YouTube"""
+        cache_key = f"yt_search:{query}"
         cached = await self._cache.get(cache_key)
-        if cached: return cached
+        if cached:
+            return cached
 
-        search_query = f"ytsearch{limit}:{query}" if "http" not in query else query
-        
         opts = {
-            'quiet': True, 
-            'extract_flat': True, 
-            'skip_download': True, 
-            'ignoreerrors': True, 
-            'nocheckcertificate': True,
+            'quiet': True,
+            'extract_flat': True,
+            'skip_download': True,
+            'ignoreerrors': True,
             'socket_timeout': 15,
         }
+        
+        if self.cookies_path.exists():
+            opts['cookiefile'] = str(self.cookies_path)
+        
+        search_query = f"ytsearch{limit}:{query}" if "http" not in query else query
         
         loop = asyncio.get_running_loop()
         try:
@@ -117,9 +137,7 @@ class YouTubeDownloader:
             if info:
                 entries = info.get('entries', []) if 'entries' in info else [info]
                 for entry in entries:
-                    if not entry: continue
-                    if int(entry.get('duration') or 0) > 1200: continue
-                        
+                    if not entry or int(entry.get('duration') or 0) > 1200: continue
                     results.append(TrackInfo(
                         identifier=entry.get('id'),
                         title=entry.get('title', 'Unknown'),
@@ -131,180 +149,274 @@ class YouTubeDownloader:
             if results:
                 await self._cache.set(cache_key, results, ttl=3600)
             return results
-            
         except Exception as e:
-            logger.error(f"Search failed: {e}")
+            logger.error(f"Search error: {e}")
             return []
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
+        """Download with full fallback chain"""
         if not track_info:
-            track_info = TrackInfo(identifier=video_id, title="Unknown", artist="Unknown", duration=0)
+            track_info = TrackInfo(
+                identifier=video_id,
+                title="Unknown",
+                artist="Unknown", 
+                duration=0,
+                source=Source.YOUTUBE
+            )
 
+        # Check cache
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         if final_path.exists() and final_path.stat().st_size > 5000:
-            logger.info(f"📁 [Cache] Found: {video_id}")
+            logger.info(f"📁 [Cache] {video_id}")
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
+        logger.info(f"📥 [Download] Starting: {video_id}")
+
         async with self.semaphore:
-            # 1. Invidious (Best chance for Audio)
-            res = await self._try_invidious(video_id, track_info)
-            if res.success: return await self._post_process(res)
-
-            # 2. Piped
-            res = await self._try_piped(video_id, track_info)
-            if res.success: return await self._post_process(res)
-
-            # 3. Cobalt
-            res = await self._try_cobalt(video_id, track_info)
-            if res.success: return await self._post_process(res)
-
-            # 4. Direct
-            res = await self._try_direct(video_id, track_info)
-            return await self._post_process(res)
-
-    async def _try_invidious(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        instances = list(self._settings.INVIDIOUS_INSTANCES or [])
-        random.shuffle(instances)
-        
-        for base_url in instances[:6]:
-            try:
-                async with httpx.AsyncClient(timeout=25.0, verify=False, follow_redirects=True) as client:
-                    # LOCAL=TRUE IS CRITICAL FOR RAILWAY
-                    api_url = f"{base_url}/api/v1/videos/{video_id}?local=true"
-                    resp = await client.get(api_url)
-                    
-                    if resp.status_code != 200:
-                        logger.warning(f"[Invidious] {base_url} status {resp.status_code}: {resp.text[:100]}")
-                        continue
-                    
-                    data = resp.json()
-                    
-                    # Try adaptiveFormats (Audio Only)
-                    formats = data.get("adaptiveFormats", [])
-                    audio_formats = [f for f in formats if f.get("type", "").startswith("audio/")]
-                    
-                    if not audio_formats: 
-                        logger.warning(f"[Invidious] {base_url} no audio formats found.")
-                        continue
-                    
-                    # Best bitrate
-                    best = max(audio_formats, key=lambda f: int(f.get("bitrate", 0))) # Fixed x to f
-                    dl_url = best.get("url")
-                    
-                    if not dl_url: 
-                        logger.warning(f"[Invidious] {base_url} no download URL found.")
-                        continue
-                        
-                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_inv.m4a"
-                    async with client.stream("GET", dl_url, timeout=90.0) as r:
-                        r.raise_for_status()
-                        with open(temp_path, "wb") as f:
-                            async for chunk in r.aiter_bytes(8192):
-                                f.write(chunk)
-                    
-                    if temp_path.exists() and temp_path.stat().st_size > 10000:
-                        logger.info(f"✅ [Invidious] Success via {base_url}")
-                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
-                        
-            except Exception as e:
-                logger.warning(f"[Invidious] Error on {base_url}: {str(e)[:100]}")
-                continue
-        return DownloadResult(success=False)
-
-    async def _try_piped(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        instances = list(self._settings.PIPED_INSTANCES or [])
-        random.shuffle(instances)
-        
-        for base_url in instances[:4]:
-            try:
-                async with httpx.AsyncClient(timeout=20.0, verify=False, follow_redirects=True) as client:
-                    resp = await client.get(f"{base_url}/streams/{video_id}")
-                    if resp.status_code != 200: 
-                        logger.warning(f"[Piped] {base_url} status {resp.status_code}: {resp.text[:100]}")
-                        continue
-                    
-                    data = resp.json()
-                    streams = data.get("audioStreams", [])
-                    if not streams: 
-                        logger.warning(f"[Piped] {base_url} no audio streams found.")
-                        continue
-                    
-                    dl_url = max(streams, key=lambda x: x.get("bitrate", 0)).get("url")
-                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_piped.m4a"
-                    
-                    async with client.stream("GET", dl_url, timeout=60.0) as r:
-                        r.raise_for_status()
-                        with open(temp_path, "wb") as f:
-                            async for chunk in r.aiter_bytes(8192):
-                                f.write(chunk)
-                    
-                    if temp_path.exists() and temp_path.stat().st_size > 10000:
-                        logger.info(f"✅ [Piped] Success via {base_url}")
-                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
-            except Exception as e: 
-                logger.warning(f"[Piped] Error on {base_url}: {str(e)[:100]}")
-                continue
-        return DownloadResult(success=False)
+            methods = [
+                ("Cobalt", self._try_cobalt),
+                ("Piped", self._try_piped),
+                ("Invidious", self._try_invidious),
+                ("Direct", self._try_direct),
+            ]
+            
+            for name, method in methods:
+                try:
+                    result = await method(video_id, track_info)
+                    if result.success:
+                        return await self._convert_to_mp3(result)
+                except Exception as e:
+                    logger.warning(f"[{name}] Error: {e}")
+            
+            return DownloadResult(
+                success=False,
+                error_message="All download methods failed",
+                track_info=track_info
+            )
 
     async def _try_cobalt(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        instances = list(self._settings.COBALT_INSTANCES or [])
+        """Cobalt API - best method currently"""
+        instances = [u for u in self.cobalt_list if not self._is_blacklisted(u)]
         random.shuffle(instances)
         
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Origin": "https://cobalt.tools",
             "Referer": "https://cobalt.tools/",
         }
         
         for base_url in instances[:3]:
             try:
+                logger.info(f"   → {base_url}")
+                
                 async with httpx.AsyncClient(timeout=30.0, verify=False, follow_redirects=True) as client:
-                    payload = {"url": f"https://www.youtube.com/watch?v={video_id}", "downloadMode": "audio"}
+                    url = f"https://www.youtube.com/watch?v={video_id}"
                     
-                    # Try v10 then v7
+                    # New API format
+                    payload = {
+                        "url": url,
+                        "downloadMode": "audio",
+                        "audioFormat": "mp3"
+                    }
+                    
                     resp = await client.post(base_url, json=payload, headers=headers)
-                    if resp.status_code == 404:
-                        resp = await client.post(f"{base_url}/api/json", json={"url": payload["url"], "isAudioOnly": True}, headers=headers)
                     
-                    if resp.status_code not in (200, 201): 
-                        logger.warning(f"[Cobalt] {base_url} status {resp.status_code}: {resp.text[:100]}")
+                    # Fallback to old API
+                    if resp.status_code == 404:
+                        logger.info(f"   → Trying old API...")
+                        resp = await client.post(
+                            f"{base_url}/api/json",
+                            json={"url": url, "isAudioOnly": True},
+                            headers=headers
+                        )
+                    
+                    logger.info(f"   → Status: {resp.status_code}")
+                    
+                    if resp.status_code not in (200, 201):
+                        self._blacklist_instance(base_url)
                         continue
                     
                     data = resp.json()
-                    dl_url = data.get("url") or data.get("picker", [{}])[0].get("url")
-                    if not dl_url: 
-                        logger.warning(f"[Cobalt] {base_url} missing URL. Data: {str(data)[:100]}")
+                    logger.info(f"   → Response: {str(data)[:100]}")
+                    
+                    # Check for error
+                    if data.get("status") == "error":
+                        error = data.get("error", {})
+                        logger.warning(f"   ⚠️ Error: {error.get('code', 'unknown')}")
                         continue
                     
+                    # Extract download URL
+                    dl_url = None
+                    if data.get("status") == "tunnel" or data.get("status") == "redirect":
+                        dl_url = data.get("url")
+                    elif data.get("url"):
+                        dl_url = data["url"]
+                    elif data.get("audio"):
+                        dl_url = data["audio"] if isinstance(data["audio"], str) else data["audio"].get("url")
+                    elif data.get("picker"):
+                        dl_url = data["picker"][0].get("url") if data["picker"] else None
+                    
+                    if not dl_url:
+                        logger.warning(f"   ⚠️ No download URL")
+                        continue
+                    
+                    logger.info(f"   → Downloading...")
                     temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_cobalt.mp3"
-                    async with client.stream("GET", dl_url, timeout=60.0) as r:
+                    
+                    async with client.stream("GET", dl_url, timeout=120.0) as r:
                         r.raise_for_status()
                         with open(temp_path, "wb") as f:
                             async for chunk in r.aiter_bytes(8192):
                                 f.write(chunk)
                     
-                    if temp_path.exists() and temp_path.stat().st_size > 10000:
-                        logger.info(f"✅ [Cobalt] Success via {base_url}")
+                    size = temp_path.stat().st_size if temp_path.exists() else 0
+                    logger.info(f"   → Size: {size // 1024} KB")
+                    
+                    if size > 10000:
                         return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
-            except Exception as e: 
-                logger.warning(f"[Cobalt] Error on {base_url}: {str(e)[:100]}")
-                continue
-        return DownloadResult(success=False, error_message="All Cobalt instances failed")
+                    else:
+                        logger.warning(f"   ⚠️ File too small")
+                        
+            except httpx.TimeoutException:
+                logger.warning(f"   ⚠️ Timeout")
+                self._blacklist_instance(base_url)
+            except Exception as e:
+                logger.warning(f"   ⚠️ {type(e).__name__}: {str(e)[:50]}")
+        
+        return DownloadResult(success=False, track_info=track_info)
+
+    async def _try_piped(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        """Piped API"""
+        instances = [u for u in self.piped_list if not self._is_blacklisted(u)]
+        random.shuffle(instances)
+        
+        for base_url in instances[:4]:
+            try:
+                logger.info(f"   → {base_url}")
+                
+                async with httpx.AsyncClient(timeout=20.0, verify=False, follow_redirects=True) as client:
+                    resp = await client.get(f"{base_url}/streams/{video_id}")
+                    
+                    logger.info(f"   → Status: {resp.status_code}")
+                    
+                    if resp.status_code != 200:
+                        self._blacklist_instance(base_url)
+                        continue
+                    
+                    data = resp.json()
+                    
+                    if data.get("error"):
+                        logger.warning(f"   ⚠️ API Error: {data.get('message', 'unknown')}")
+                        continue
+                    
+                    streams = data.get("audioStreams", [])
+                    if not streams:
+                        logger.warning(f"   ⚠️ No audio streams")
+                        continue
+                    
+                    best = max(streams, key=lambda x: x.get("bitrate", 0))
+                    dl_url = best.get("url")
+                    
+                    if not dl_url:
+                        continue
+                    
+                    logger.info(f"   → Downloading...")
+                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_piped.m4a"
+                    
+                    async with client.stream("GET", dl_url, timeout=120.0) as r:
+                        r.raise_for_status()
+                        with open(temp_path, "wb") as f:
+                            async for chunk in r.aiter_bytes(8192):
+                                f.write(chunk)
+                    
+                    size = temp_path.stat().st_size if temp_path.exists() else 0
+                    logger.info(f"   → Size: {size // 1024} KB")
+                    
+                    if size > 10000:
+                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
+                        
+            except Exception as e:
+                logger.warning(f"   ⚠️ {type(e).__name__}")
+        
+        return DownloadResult(success=False, track_info=track_info)
+
+    async def _try_invidious(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        """Invidious API"""
+        instances = [u for u in self.invidious_list if not self._is_blacklisted(u)]
+        random.shuffle(instances)
+        
+        for base_url in instances[:4]:
+            try:
+                logger.info(f"   → {base_url}")
+                
+                async with httpx.AsyncClient(
+                    timeout=20.0,
+                    verify=False,
+                    follow_redirects=True,
+                    headers={"User-Agent": "Mozilla/5.0"}
+                ) as client:
+                    resp = await client.get(f"{base_url}/api/v1/videos/{video_id}")
+                    
+                    logger.info(f"   → Status: {resp.status_code}")
+                    
+                    if resp.status_code in (401, 403, 502, 503):
+                        self._blacklist_instance(base_url)
+                        continue
+                    
+                    if resp.status_code != 200:
+                        continue
+                    
+                    data = resp.json()
+                    formats = data.get("adaptiveFormats", [])
+                    audio = [f for f in formats if f.get("type", "").startswith("audio/")]
+                    
+                    if not audio:
+                        logger.warning(f"   ⚠️ No audio formats")
+                        continue
+                    
+                    best = max(audio, key=lambda x: int(x.get("bitrate", 0)))
+                    dl_url = best.get("url")
+                    
+                    if not dl_url:
+                        continue
+                    
+                    logger.info(f"   → Downloading...")
+                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_inv.m4a"
+                    
+                    async with client.stream("GET", dl_url, timeout=120.0) as r:
+                        r.raise_for_status()
+                        with open(temp_path, "wb") as f:
+                            async for chunk in r.aiter_bytes(8192):
+                                f.write(chunk)
+                    
+                    size = temp_path.stat().st_size if temp_path.exists() else 0
+                    logger.info(f"   → Size: {size // 1024} KB")
+                    
+                    if size > 10000:
+                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
+                        
+            except Exception as e:
+                logger.warning(f"   ⚠️ {type(e).__name__}")
+        
+        return DownloadResult(success=False, track_info=track_info)
 
     async def _try_direct(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        """Direct yt-dlp with PO_TOKEN"""
         url = f"https://www.youtube.com/watch?v={video_id}"
         
-        # Proxies (SOCKS5 preferred)
-        candidates = [p for p in self.proxies if "socks5" in p][:3] + [None]
+        # Try with SOCKS5 proxies first, then direct
+        candidates = [p for p in self.proxies if "socks5" in p][:3]
+        candidates.append(None)  # Direct as last resort
         
         loop = asyncio.get_running_loop()
         
         for proxy in candidates:
-            proxy_label = "Direct" if not proxy else proxy.split("@")[-1][:20]
-            logger.info(f"🔧 [Direct] Try via {proxy_label}")
+            proxy_label = "Direct" if not proxy else proxy.split("@")[-1][:30] if "@" in proxy else proxy[:30]
+            logger.info(f"   → {proxy_label}")
             
+            # Build options
             opts = {
                 'format': 'bestaudio[ext=m4a]/bestaudio/best',
                 'outtmpl': str(self._settings.DOWNLOADS_DIR / f"{video_id}_direct.%(ext)s"),
@@ -313,39 +425,113 @@ class YouTubeDownloader:
                 'nocheckcertificate': True,
                 'socket_timeout': 30,
                 'retries': 2,
-                
-                'extractor_args': {'youtube': self._build_extractor_args()}
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['ios', 'android_creator', 'web'],
+                        'player_skip': ['webpage', 'configs']
+                    }
+                }
             }
             
-            if proxy: opts['proxy'] = proxy
-            if self.cookies_path.exists(): opts['cookiefile'] = str(self.cookies_path)
+            # === INJECT PO_TOKEN ===
+            if self._settings.PO_TOKEN:
+                po = self._settings.PO_TOKEN
+                # Format: "web+token" or just "token"
+                if '+' not in po:
+                    po = f"web+{po}"
+                opts['extractor_args']['youtube']['po_token'] = [po]
+                logger.info(f"   → PO_TOKEN injected")
+            
+            if self._settings.VISITOR_DATA:
+                opts['extractor_args']['youtube']['visitor_data'] = [self._settings.VISITOR_DATA]
+            
+            if proxy:
+                opts['proxy'] = proxy
+            
+            if self.cookies_path.exists():
+                opts['cookiefile'] = str(self.cookies_path)
             
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     await loop.run_in_executor(None, lambda: ydl.download([url]))
                 
-                for f in self._settings.DOWNLOADS_DIR.glob(f"{video_id}_direct.*"):
+                # Find downloaded file
+                for ext in ['m4a', 'webm', 'mp3', 'opus', 'ogg']:
+                    f = self._settings.DOWNLOADS_DIR / f"{video_id}_direct.{ext}"
                     if f.exists() and f.stat().st_size > 10000:
-                        logger.info(f"✅ [Direct] Success via {proxy_label}")
+                        logger.info(f"   → Downloaded: {f.stat().st_size // 1024} KB")
                         return DownloadResult(success=True, file_path=f, track_info=track_info)
+                
+                logger.warning(f"   ⚠️ No output file")
+                
+            except yt_dlp.utils.DownloadError as e:
+                err = str(e)
+                if "Sign in" in err or "bot" in err.lower():
+                    logger.warning(f"   ⚠️ Bot detection - need valid PO_TOKEN")
+                elif "Requested format" in err:
+                    logger.warning(f"   ⚠️ Format unavailable - try different client")
+                else:
+                    logger.warning(f"   ⚠️ {err[:60]}")
             except Exception as e:
-                logger.warning(f"[Direct] Failed via {proxy_label}: {str(e)[:100]}")
-                pass # Continue to next proxy
+                logger.warning(f"   ⚠️ {type(e).__name__}: {str(e)[:50]}")
+            
+            # Cleanup failed attempt
+            for f in self._settings.DOWNLOADS_DIR.glob(f"{video_id}_direct.*"):
+                try:
+                    f.unlink()
+                except:
+                    pass
         
-        return DownloadResult(success=False, error_message="All direct methods failed", track_info=track_info)
+        return DownloadResult(success=False, track_info=track_info)
 
-    async def _post_process(self, result: DownloadResult) -> DownloadResult:
-        if not result.success or not result.file_path: return result
+    async def _convert_to_mp3(self, result: DownloadResult) -> DownloadResult:
+        """Convert to MP3 using FFmpeg"""
+        if not result.success or not result.file_path:
+            return result
+        
+        src = result.file_path
         target = self._settings.DOWNLOADS_DIR / f"{result.track_info.identifier}.mp3"
-        if result.file_path.suffix == ".mp3" and result.file_path.name == target.name: return result
+        
+        # Already MP3 with correct name
+        if src == target:
+            return result
+        
+        # Target already exists
+        if target.exists() and target.stat().st_size > 5000:
+            try:
+                src.unlink()
+            except:
+                pass
+            result.file_path = target
+            return result
+        
+        # Convert
         try:
-            proc = await asyncio.create_subprocess_exec('ffmpeg', '-y', '-i', str(result.file_path), '-vn', '-acodec', 'libmp3lame', '-q:a', '2', str(target), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            logger.info(f"🎵 Converting to MP3...")
+            proc = await asyncio.create_subprocess_exec(
+                'ffmpeg', '-y', '-i', str(src),
+                '-vn', '-acodec', 'libmp3lame', '-q:a', '2',
+                str(target),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
             await asyncio.wait_for(proc.wait(), timeout=120)
+            
             if target.exists() and target.stat().st_size > 5000:
-                try: result.file_path.unlink() 
-                except: pass
+                try:
+                    src.unlink()
+                except:
+                    pass
                 result.file_path = target
+                logger.info(f"✅ Converted: {target.name}")
             else:
                 logger.warning("FFmpeg produced empty file")
-        except Exception as e: logger.error(f"FFmpeg error: {e}")
+                
+        except asyncio.TimeoutError:
+            logger.error("FFmpeg timeout")
+        except FileNotFoundError:
+            logger.warning("FFmpeg not found")
+        except Exception as e:
+            logger.error(f"FFmpeg error: {e}")
+        
         return result
