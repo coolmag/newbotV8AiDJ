@@ -22,12 +22,6 @@ from ai_manager import AIManager
 # Импортируем nlp
 from nlp import analyze_message
 
-def _get_debug_log_path():
-    """Get path to debug log file, works on both Windows and Linux"""
-    base_dir = Path(__file__).resolve().parent
-    log_path = base_dir / ".cursor" / "debug.log"
-    return str(log_path)
-
 logger = logging.getLogger("handlers")
 
 GREETINGS = {
@@ -40,43 +34,80 @@ GREETINGS = {
 
 # --- ВНУТРЕННИЕ ИСПОЛНИТЕЛИ ---
 
-async def _do_play(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
-    short_query = query[:200] + "..." if len(query) > 200 else query
+async def _do_spotify_play(chat_id: int, spotify_url: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
+    """Handles downloading and sending a track from a Spotify URL."""
     msg = await context.bot.send_message(
-        chat_id, 
-        f"🔎 Ищу: *{short_query}*...", 
+        chat_id,
+        "🎶 Распознал ссылку Spotify. Ищу трек...",
         parse_mode=ParseMode.MARKDOWN,
         disable_notification=True
     )
-    
+
+    spotify_service: SpotifyService = context.application.spotify_service
+    dl_res = await spotify_service.download_from_url(spotify_url)
+
+    await msg.delete()
+
+    if dl_res.success and dl_res.file_path:
+        try:
+            # Безопасное получение названия и артиста
+            title = "Unknown Title"
+            performer = "Unknown Artist"
+            duration = 0
+
+            if dl_res.track_info:
+                title = dl_res.track_info.title or title
+                performer = dl_res.track_info.artist or performer
+                duration = dl_res.track_info.duration or duration
+
+            with open(dl_res.file_path, 'rb') as f:
+                await context.bot.send_audio(
+                    chat_id=chat_id, audio=f, title=title[:64],
+                    performer=performer[:64], duration=duration
+                )
+            logger.info(f"[{chat_id}] Successfully sent Spotify track: '{title}' by '{performer}'")
+
+        except Exception as e:
+            logger.error(f"[{chat_id}] Error sending Spotify audio: {e}", exc_info=True)
+            await context.bot.send_message(chat_id, "❌ Ошибка при отправке файла.")
+    else:
+        logger.warning(f"[{chat_id}] Spotify download failed: {dl_res.error_message}")
+        await context.bot.send_message(chat_id, f"😕 Не удалось скачать трек из Spotify: {dl_res.error_message or 'Неизвестная ошибка'}")
+
+async def _do_play(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
+    short_query = query[:200] + "..." if len(query) > 200 else query
+    msg = await context.bot.send_message(
+        chat_id,
+        f"🔎 Ищу на YouTube: *{short_query}*...",
+        parse_mode=ParseMode.MARKDOWN,
+        disable_notification=True
+    )
+
     tracks = await context.application.downloader.search(query, limit=1)
-    
+
     if tracks:
         await msg.delete()
-        dl_res = await context.application.downloader.download(tracks[0].identifier)
+        # Pass the full track_info to download method
+        dl_res = await context.application.downloader.download(tracks[0].identifier, tracks[0])
+
         if dl_res.success and dl_res.file_path:
             try:
-                # Безопасное получение названия и артиста
                 title = "Unknown Title"
                 performer = "Unknown Artist"
-                duration = 0 # Default duration
-                
+                duration = 0
+
                 if dl_res.track_info:
                     title = dl_res.track_info.title or title
                     performer = dl_res.track_info.artist or performer
                     duration = dl_res.track_info.duration or duration
-                
-                # Отправка файла
+
                 with open(dl_res.file_path, 'rb') as f:
                     await context.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=f,
-                        title=title[:64], # Telegram ограничение на длину заголовка
-                        performer=performer[:64], # Ограничение на длину имени исполнителя
-                        duration=duration
+                        chat_id=chat_id, audio=f, title=title[:64],
+                        performer=performer[:64], duration=duration
                     )
-                logger.info(f"[{chat_id}] Successfully sent audio: '{title}' by '{performer}'")
-                
+                logger.info(f"[{chat_id}] Successfully sent YouTube audio: '{title}' by '{performer}'")
+
             except Exception as e:
                 logger.error(f"[{chat_id}] Error sending audio: {e}", exc_info=True)
                 await context.bot.send_message(chat_id, "❌ Ошибка при отправке файла.")
@@ -84,7 +115,7 @@ async def _do_play(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE,
              logger.warning(f"[{chat_id}] Download result not successful: {dl_res.error_message}")
              await context.bot.send_message(chat_id, f"😕 Не удалось скачать трек: {dl_res.error_message or 'Неизвестная ошибка'}")
     else:
-        await msg.edit_text("😕 Не нашла ничего по запросу.")
+        await msg.edit_text("😕 Не нашла ничего по запросу на YouTube.")
 
 async def _do_radio(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
     effective_query = query or "случайные популярные треки"
@@ -93,31 +124,10 @@ async def _do_radio(chat_id: int, query: str, context: ContextTypes.DEFAULT_TYPE
 
 async def _do_chat_reply(chat_id: int, text: str, user_name: str, context: ContextTypes.DEFAULT_TYPE, update: Update):
     """Безопасная отправка ответа"""
-    # #region agent log
-    try:
-        import json
-        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"handlers.py:61","message":"_do_chat_reply ENTRY","data":{"chat_id":chat_id,"text_preview":text[:50],"user_name":user_name},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
-    
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-    
     response = await ChatManager.get_response(chat_id, text, user_name)
-    
-    # #region agent log
-    try:
-        import json
-        with open(_get_debug_log_path(), "a", encoding="utf-8") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"E","location":"handlers.py:65","message":"_do_chat_reply got response","data":{"has_response":bool(response),"response_preview":response[:50] if response else None},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
-    
-    # ЗАЩИТА ОТ CRASH: Если ответ пустой, ставим заглушку
     if not response or not response.strip():
         response = "..."
-        
-    # Проверка на JSON-команду от AI
     if "{" in response and "command" in response:
         try:
             data = json.loads(response[response.find("{"):response.rfind("}")+1])
@@ -125,50 +135,53 @@ async def _do_chat_reply(chat_id: int, text: str, user_name: str, context: Conte
                 await _do_radio(chat_id, data.get("query", "random"), context, update)
                 return
         except: pass
-    
     try:
         await update.message.reply_text(response)
     except BadRequest as e:
         logger.error(f"Failed to send reply: {e}")
-        # Если даже заглушка не отправилась (редкость), игнорируем
 
 # --- HANDLER ---
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.effective_message.text
     chat_id = update.effective_chat.id
-    
+
     if not message_text or len(message_text) < 2: return
-    
-    # Проверяем режим чата - если quiz, ответы идут сразу в AI
+
+    # --- Spotify URL Handler ---
+    if "open.spotify.com/track" in message_text:
+        # Extract URL from message
+        url_match = re.search(r'(https?://open\.spotify\.com/track/[a-zA-Z0-9]+)', message_text)
+        if url_match:
+            spotify_url = url_match.group(1)
+            await _do_spotify_play(chat_id, spotify_url, context, update)
+            return
+
+    # --- Standard command/NLP logic ---
     current_mode = ChatManager.get_mode(chat_id)
     is_quiz_mode = current_mode == "quiz"
-    
-    # Проверяем, было ли последнее сообщение бота вопросом викторины (содержит ❓)
-    # В этом случае ответ пользователя должен идти в чат, а не в NLP
+
     try:
         last_message = await context.bot.fetch_message(chat_id, update.effective_message.message_id - 1)
         is_quiz_question = last_message and last_message.from_user.id == context.bot.id and "❓" in (last_message.text or "")
     except:
         is_quiz_question = False
-    
+
     is_private = update.effective_chat.type == ChatType.PRIVATE
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
     is_mention = any(w in message_text.lower() for w in ["аврора", "aurora", "бот", "dj"])
 
-    # 1. Прямой диалог или режим викторины -> Сразу в чат
     if is_private or is_reply or is_mention or is_quiz_mode or is_quiz_question:
         await _do_chat_reply(chat_id, message_text, update.effective_user.first_name, context, update)
         return
 
-    # 2. Неявный запрос -> Анализируем через NLP
     try:
         intent, query = await analyze_message(message_text)
         logger.info(f"[{chat_id}] NLP Analysis: '{message_text}' -> {intent} (query: '{query}')")
     except Exception as e:
         logger.error(f"[{chat_id}] NLP error: {e}, using default chat")
-        intent, query = "chat", message_text  # Fallback на чат с оригинальным сообщением
-    
+        intent, query = "chat", message_text
+
     if intent == 'chat':
         await _do_chat_reply(chat_id, message_text, update.effective_user.first_name, context, update)
     elif intent == 'search':
@@ -198,7 +211,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         for provider, status in zip(providers, results):
             provider_lines.append(f"• {provider.name}: {status}")
-    
+
     provider_list = "\n".join(provider_lines)
 
     # --- Проверка резервного провайдера Gemini ---
@@ -208,7 +221,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # generate_smart - синхронная функция, запускаем в исполнителе
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, lambda: generate_smart("Ответь одним словом: OK"))
-            
+
             if result and "OK" in result:
                 gemini_status = "✅ OK"
             else:
@@ -218,7 +231,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             gemini_status = "❌ FAILED"
 
     # --- Формирование и отправка ответа ---
-    text = f"""📊 *System Status*
+    text = f"""
+📊 *System Status*
 
 *Основные AI провайдеры (онлайн-проверка):*
 {provider_list}
@@ -226,18 +240,18 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 *Резервный AI провайдер:*
 • Gemini (Fallback): {gemini_status}
 """
-    
+
     await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def test_ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Тестирует AI провайдеров"""
     chat_id = update.effective_chat.id
     user_name = update.effective_user.first_name
-    
+
     msg = await update.message.reply_text("🔄 Тестирую AI провайдеры...")
-    
+
     test_responses = []
-    
+
     # Тестируем Gemini
     from gemini_init import HAS_GENAI
     if HAS_GENAI:
@@ -252,20 +266,21 @@ async def test_ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             test_responses.append(f"❌ Gemini: {str(e)[:50]}")
     else:
         test_responses.append(f"❌ Gemini: не настроен")
-    
+
     # Показываем результат
-    text = f"""🧪 *Тест AI*
+    text = f"""
+🧪 *Тест AI*
 
 {chr(10).join(test_responses)}
 
 💡 Бот автоматически переключится на работающий провайдер."""
-    
+
     await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     settings = get_settings()
-    
+
     # ПРОВЕРКА: Если пользователя нет в списке админов — игнорируем
     if user_id not in settings.ADMIN_ID_LIST:
         await update.message.reply_text("⛔️ У вас нет прав админа.")
@@ -288,7 +303,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     settings = get_settings() # Получаем настройки
-    
+
     await query.answer()
 
     if query.data == "close_admin":
@@ -299,7 +314,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         mode = query.data.split("|")[1]
         ChatManager.set_mode(update.effective_chat.id, mode)
-        
+
         # Если включаем викторину - сразу запускаем первый вопрос
         if mode == "quiz":
             from chat_service import QuizManager
@@ -322,10 +337,11 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.application.radio_manager.stop(update.effective_chat.id)
     await context.bot.send_message(update.effective_chat.id, "🛑 Стоп.")
 
-def setup_handlers(app, radio, settings, downloader):
+def setup_handlers(app, radio, settings, downloader, spotify_service):
     app.downloader = downloader
     app.radio_manager = radio
     app.settings = settings
+    app.spotify_service = spotify_service
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play_command))
     app.add_handler(CommandHandler("radio", radio_command))

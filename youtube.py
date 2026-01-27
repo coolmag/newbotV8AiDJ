@@ -1,11 +1,10 @@
-from __future__ import annotations
 import asyncio
 import logging
-import os
 import random
-import time
+import os
+import json
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional
 import httpx
 import yt_dlp
 from config import Settings
@@ -16,203 +15,297 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    ADAPTER: NUCLEAR OPTION - Maximum compatibility
-    - Skip problematic video IDs
-    - Multiple fallback methods
-    - Direct file download if all else fails
+    Next-Gen Downloader (2026 Ready).
+    Strategy:
+    1. Cache Check
+    2. Delegation (Cobalt API) -> Bypasses Railway IP blocks completely.
+    3. Delegation (Piped API) -> Secondary fallback.
+    4. Direct (yt-dlp with PoToken/Android Client) -> Last resort.
     """
+    
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         
-        self.cookies_path = Path("cookies/youtube_railway.txt")
-        cookies_content = os.getenv("YT_COOKIES_CONTENT") or os.getenv("COOKIES_CONTENT")
-        if cookies_content:
-            try:
-                self.cookies_path.parent.mkdir(exist_ok=True)
-                with open(self.cookies_path, "w", encoding="utf-8") as f:
-                    f.write(cookies_content)
-                logger.info("🍪 Cookies loaded.")
-            except Exception as e:
-                logger.error(f"Failed to write cookies: {e}")
-
-        self.semaphore = asyncio.Semaphore(1)
-        self.search_semaphore = asyncio.Semaphore(2)
-
-        self.search_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": True,
-            "skip_download": True,
-            "socket_timeout": 20,
-            "retries": 3,
-            "ignoreerrors": True,
-        }
-
-        self.problematic_prefixes = ['--', 'n--', 'ytr', 'yt-']
+        # Настройка Cookies и Auth
+        self._setup_auth()
         
-        self.base_ytdlp_opts = {
+        # Семафор для ограничения нагрузки на сеть
+        self.semaphore = asyncio.Semaphore(self._settings.MAX_CONCURRENT_DOWNLOADS)
+        
+        # Базовые настройки yt-dlp для "Direct" режима
+        self.ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
             "quiet": True,
             "no_warnings": True,
-            "outtmpl": str(self._settings.DOWNLOADS_DIR / "%(id)s.%(ext)s"),
-            "keepvideo": False,
-            "socket_timeout": 60,
-            "retries": 20,
+            "nocheckcertificate": True,
             "ignoreerrors": True,
-            'nocheckcertificate': True,
-            "no_color": True,
-            "extractor_retries": 3,
-            "fragment_retries": 10,
-            "skip_unavailable_fragments": True,
-            "hls_prefer_native": True,
-        }
-
-        self.sabr_bypass_extractor_args = {
-            "youtube": {
-                "player_client": ["tv_embedded", "web_creator", "android_music"],
-                "player_skip": ["webpage"],
-            }
-        }
-        self.sabr_bypass_http_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            # ВАЖНО: Использование Android клиента часто обходит 403 на хостингах
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "ios", "web_creator"],
+                    "player_skip": ["webpage", "configs", "js"],
+                }
+            },
+            # Если есть PO_TOKEN (добавить в ENV)
+            "po_token_web": self._settings.PO_TOKEN if self._settings.PO_TOKEN else None,
         }
 
         if self.cookies_path.exists():
-            self.search_opts['cookiefile'] = str(self.cookies_path)
-            self.base_ytdlp_opts['cookiefile'] = str(self.cookies_path)
-            logger.info("Cookie file applied.")
+            self.ydl_opts['cookiefile'] = str(self.cookies_path)
 
-        logger.info("🟢 YouTube 'Nuclear Option' Engine initialized.")
+        logger.info("🚀 Next-Gen YouTube Engine Initialized")
 
-    def is_problematic_video_id(self, video_id: str) -> bool:
-        if len(video_id) < 8 or any(video_id.startswith(p) for p in self.problematic_prefixes) or video_id.count('-') > 2:
-            return True
-        return False
+    def _setup_auth(self):
+        """Загрузка Cookies из ENV (Railway friendly)"""
+        self.cookies_path = Path("cookies.txt")
+        cookies_content = self._settings.COOKIES_CONTENT
+        if cookies_content:
+            try:
+                with open(self.cookies_path, "w", encoding="utf-8") as f:
+                    f.write(cookies_content)
+                logger.info("🍪 Cookies loaded from ENV.")
+            except Exception as e:
+                logger.error(f"Failed to write cookies: {e}")
 
-    async def search(self, query: str, search_mode: str = 'genre', decade: Optional[str] = None, limit: int = 20) -> List[TrackInfo]:
-        clean_query = query.lower().strip(); search_text = f"{clean_query} audio" if "audio" not in clean_query else clean_query
-        cache_key = f"yt_search_nuclear:{clean_query}"
+    async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
+        """
+        Поиск. Используем yt-dlp 'extract_flat' - это быстро и редко блокируется.
+        """
+        cache_key = f"search_v2:{query}"
         cached = await self._cache.get(cache_key)
         if cached: return cached
+
+        logger.info(f"🔎 Searching: {query}")
         
-        async with self.search_semaphore:
-            loop = asyncio.get_running_loop()
-            def do_search():
-                with yt_dlp.YoutubeDL(self.search_opts) as ydl:
-                    try: return ydl.extract_info(f"ytsearch{limit}:{search_text}", download=False)
-                    except Exception: return None
-            try:
-                res = await asyncio.wait_for(loop.run_in_executor(None, do_search), timeout=30.0)
-            except asyncio.TimeoutError: return []
+        # Формируем поисковый запрос
+        search_query = f"ytsearch{limit}:{query}" if "http" not in query else query
+        
+        loop = asyncio.get_running_loop()
+        
+        try:
+            # Используем отдельную конфигурацию для поиска (максимально легкую)
+            search_opts = {
+                'quiet': True, 
+                'extract_flat': True, 
+                'skip_download': True,
+                'ignoreerrors': True
+            }
             
+            with yt_dlp.YoutubeDL(search_opts) as ydl:
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_query, download=False))
+                
             results = []
-            if res and 'entries' in res:
-                for entry in res.get('entries', []):
+            if info:
+                entries = info.get('entries', []) if 'entries' in info else [info]
+                for entry in entries:
                     if not entry: continue
-                    video_id = str(entry.get('id', ''))
-                    if self.is_problematic_video_id(video_id): continue
-                    results.append(TrackInfo(identifier=video_id, title=entry.get('title', 'Unknown'), artist=entry.get('channel', 'Unknown'), duration=int(entry.get('duration') or 0), source=Source.YOUTUBE))
-            if results: await self._cache.set(cache_key, results, ttl=3600)
+                    t = TrackInfo(
+                        identifier=entry.get('id'),
+                        title=entry.get('title', 'Unknown'),
+                        artist=entry.get('uploader') or entry.get('channel', 'Unknown'),
+                        duration=int(entry.get('duration') or 0),
+                        source=Source.YOUTUBE
+                    )
+                    results.append(t)
+            
+            if results:
+                await self._cache.set(cache_key, results, ttl=3600)
             return results
+            
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            return []
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
+        """
+        Основной метод загрузки. Реализует паттерн каскада.
+        """
         if not track_info:
-            track_info = TrackInfo(identifier=video_id, title="Unknown Track", artist="Web Player", duration=0, source=Source.YOUTUBE)
-        if self.is_problematic_video_id(video_id):
-            return DownloadResult(success=False, error_message=f"Unsupported video ID: {video_id}", track_info=track_info)
+            track_info = TrackInfo(identifier=video_id, title="Unknown", artist="Unknown", duration=0)
 
-        cached_file_id = await self._cache.get(f"file_id:{video_id}")
-        if cached_file_id: return DownloadResult(success=True, file_id=cached_file_id, track_info=track_info)
-        
-        final_path_mp3 = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
-        if final_path_mp3.exists() and final_path_mp3.stat().st_size > 10000:
-             return DownloadResult(success=True, file_path=final_path_mp3, track_info=track_info)
-        
-        result = await self._download_piped_fast(video_id, track_info)
-        if not result.success: result = await self._download_ytdlp_aggressive(video_id, track_info)
-        if not result.success: result = await self._download_any_audio(video_id, track_info)
-        
-        if result.success and result.file_path and result.file_path.suffix != ".mp3":
-            result = await self._convert_to_mp3(result.file_path, track_info)
-        
-        if result.success and result.file_path:
-            await self._cache.set(f"file_id:{video_id}", video_id, ttl=86400)
-        
-        return result
+        # 1. Проверка кэша (файл уже скачан?)
+        final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
+        if final_path.exists() and final_path.stat().st_size > 50000:
+            logger.info(f"💾 Cache hit for {video_id}")
+            return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
-    async def _download_piped_fast(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        piped_instances = self._settings.PIPED_INSTANCE_LIST
-        random.shuffle(piped_instances)
-        async with httpx.AsyncClient(timeout=15.0, limits=httpx.Limits(max_connections=5), follow_redirects=True) as client:
-            for instance in piped_instances:
-                try:
-                    info_resp = await client.get(f"{instance}/streams/{video_id}", timeout=10)
-                    if info_resp.status_code != 200: continue
-                    data = info_resp.json()
-                    if data.get("error"): continue
-                    audio_streams = sorted(data.get("audioStreams",[]), key=lambda x: x.get("bitrate",0), reverse=True)
-                    if not audio_streams: continue
-                    audio_url = audio_streams[0].get("url")
-                    if not audio_url: continue
-                    file_ext = audio_streams[0].get("format", "webm").lower()
-                    file_path = self._settings.DOWNLOADS_DIR / f"{video_id}.{file_ext}"
-                    async with client.stream("GET", audio_url, timeout=30) as response:
-                        response.raise_for_status()
-                        with file_path.open("wb") as f:
-                            async for chunk in response.aiter_bytes(): f.write(chunk)
-                    if file_path.exists() and file_path.stat().st_size > 5000:
-                        return DownloadResult(success=True, file_path=file_path, track_info=track_info)
-                except Exception: continue
-        return DownloadResult(success=False, error_message="Fast Piped failed", track_info=track_info)
-
-    async def _download_ytdlp_aggressive(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        opts = {**self.base_ytdlp_opts, "format": "bestaudio/best", "postprocessors": [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-                "extractor_args": self.sabr_bypass_extractor_args, "http_headers": self.sabr_bypass_http_headers}
-        return await self._execute_ytdlp_download(url, opts, video_id, track_info)
-
-    async def _download_any_audio(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        opts = {**self.base_ytdlp_opts, "format": "worst", "force_generic_extractor": True}
-        return await self._execute_ytdlp_download(f"https://www.youtube.com/watch?v={video_id}", opts, video_id, track_info)
-
-    async def _execute_ytdlp_download(self, url: str, opts: dict, video_id: str, track_info: TrackInfo) -> DownloadResult:
         async with self.semaphore:
-            loop = asyncio.get_running_loop()
-            def do_download():
+            # 2. Стратегия Cobalt (Делегирование) - САМАЯ НАДЕЖНАЯ В 2026
+            res = await self._strategy_cobalt(video_id, track_info)
+            if res.success: return await self._finalize_file(res)
+
+            # 3. Стратегия Piped (Делегирование резерв)
+            res = await self._strategy_piped(video_id, track_info)
+            if res.success: return await self._finalize_file(res)
+
+            # 4. Стратегия Direct (Локальный yt-dlp) - Крайний случай
+            res = await self._strategy_direct_ytdlp(video_id, track_info)
+            return await self._finalize_file(res)
+
+    async def _strategy_cobalt(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        """
+        Использует API Cobalt.tools.
+        Плюсы: IP сервера Railway не светится перед YouTube.
+        """
+        logger.info(f"🛡 Trying Cobalt strategy for {video_id}...")
+        
+        # Перемешиваем инстансы для балансировки
+        instances = list(self._settings.COBALT_INSTANCES)
+        random.shuffle(instances)
+        
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            for base_url in instances:
                 try:
-                    with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
-                    return True
+                    # Cobalt API Request
+                    payload = {
+                        "url": f"https://www.youtube.com/watch?v={video_id}",
+                        "vCodec": "h264",
+                        "vQuality": "480",
+                        "aFormat": "mp3", # Просим сразу MP3
+                        "isAudioOnly": True
+                    }
+                    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+                    
+                    # 1. Запрашиваем ссылку
+                    resp = await client.post(f"{base_url}/api/json", json=payload, headers=headers)
+                    if resp.status_code != 200: continue
+                    
+                    data = resp.json()
+                    download_url = data.get("url")
+                    if not download_url: continue
+                    
+                    # 2. Скачиваем файл
+                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_temp.mp3"
+                    async with client.stream("GET", download_url) as r:
+                        r.raise_for_status()
+                        with open(temp_path, "wb") as f:
+                            async for chunk in r.aiter_bytes():
+                                f.write(chunk)
+                                
+                    if temp_path.stat().st_size > 10000:
+                        logger.info(f"✅ Cobalt success via {base_url}")
+                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
+
                 except Exception as e:
-                    if "is not a valid URL" not in str(e): logger.warning(f"yt-dlp download error: {e}")
-                    return False
-            try:
-                if await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=180.0):
-                    return await self._wait_for_file(video_id, track_info)
-            except asyncio.TimeoutError: pass
-        return DownloadResult(success=False, error_message="yt-dlp execution failed", track_info=track_info)
+                    logger.warning(f"Cobalt instance {base_url} failed: {e}")
+                    continue
+                    
+        return DownloadResult(success=False, error_message="All Cobalt instances failed")
 
-    async def _wait_for_file(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        start_wait = time.time(); extensions = ['.mp3', '.webm', '.m4a', '.opus']
-        while time.time() - start_wait < 30:
-            for ext in extensions:
-                path = self._settings.DOWNLOADS_DIR / f"{video_id}{ext}"
-                if path.exists() and path.stat().st_size > 5000:
-                    return DownloadResult(success=True, file_path=path, track_info=track_info)
-            await asyncio.sleep(1)
-        return DownloadResult(success=False, error_message="File not found after download", track_info=track_info)
+    async def _strategy_piped(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        """
+        Использует API Piped.
+        """
+        logger.info(f"🛡 Trying Piped strategy for {video_id}...")
+        instances = list(self._settings.PIPED_INSTANCES)
+        random.shuffle(instances)
+        
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for base_url in instances:
+                try:
+                    # Получаем стримы
+                    resp = await client.get(f"{base_url}/streams/{video_id}")
+                    if resp.status_code != 200: continue
+                    
+                    data = resp.json()
+                    audio_streams = [s for s in data.get("audioStreams", []) if s.get("url")]
+                    if not audio_streams: continue
+                    
+                    # Берем лучший битрейт
+                    best_stream = max(audio_streams, key=lambda x: x.get("bitrate", 0))
+                    stream_url = best_stream["url"]
+                    
+                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_piped.mp3" # Piped обычно отдает m4a/webm, но ffmpeg потом починит
+                    
+                    async with client.stream("GET", stream_url) as r:
+                        r.raise_for_status()
+                        with open(temp_path, "wb") as f:
+                            async for chunk in r.aiter_bytes():
+                                f.write(chunk)
+                                
+                    if temp_path.stat().st_size > 10000:
+                        logger.info(f"✅ Piped success via {base_url}")
+                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
 
-    async def _convert_to_mp3(self, input_path: Path, track_info: TrackInfo) -> DownloadResult:
-        if not input_path.exists(): return DownloadResult(success=False, error_message="Input file not found", track_info=track_info)
-        output_path = input_path.with_suffix(".mp3")
-        if input_path.suffix.lower() == '.mp3': return DownloadResult(success=True, file_path=input_path, track_info=track_info)
+                except Exception as e:
+                    continue
+                    
+        return DownloadResult(success=False, error_message="All Piped instances failed")
+
+    async def _strategy_direct_ytdlp(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        """
+        Локальный yt-dlp. Используем как последнее средство.
+        Пытаемся эмулировать мобильный клиент.
+        """
+        logger.warning(f"⚠️ Falling back to direct yt-dlp for {video_id}...")
+        
+        loop = asyncio.get_running_loop()
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        
         try:
-            cmd = ['ffmpeg', '-i', str(input_path), '-y', '-codec:a', 'libmp3lame', '-q:a', '4', str(output_path)]
-            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            # Копируем опции чтобы не засорять глобальные
+            opts = self.ydl_opts.copy()
+            
+            # Попытка скачать
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                await loop.run_in_executor(None, lambda: ydl.download([url]))
+            
+            # Проверяем что скачалось
+            # yt-dlp может скачать как m4a, webm или mp3 в зависимости от source
+            # Ищем любой файл с этим ID
+            for f in self._settings.DOWNLOADS_DIR.glob(f"{video_id}.*"):
+                if f.stat().st_size > 10000:
+                    return DownloadResult(success=True, file_path=f, track_info=track_info)
+                    
+            return DownloadResult(success=False, error_message="Direct download finished but file missing")
+            
+        except Exception as e:
+            logger.error(f"Direct download failed: {e}")
+            return DownloadResult(success=False, error_message=str(e))
+
+    async def _finalize_file(self, result: DownloadResult) -> DownloadResult:
+        """
+        Приводит файл к формату MP3, если он был скачан в другом формате.
+        """
+        if not result.success or not result.file_path:
+            return result
+            
+        input_path = result.file_path
+        target_path = self._settings.DOWNLOADS_DIR / f"{result.track_info.identifier}.mp3"
+        
+        # Если уже MP3 и имя правильное
+        if input_path.suffix == ".mp3" and input_path.name == target_path.name:
+            return result
+            
+        # Конвертация через FFmpeg
+        try:
+            logger.info(f"🔧 Converting {input_path.name} to MP3...")
+            proc = await asyncio.create_subprocess_exec(
+                'ffmpeg', '-i', str(input_path),
+                '-vn', # no video
+                '-acodec', 'libmp3lame',
+                '-q:a', '4', # good quality VBR
+                '-y', # overwrite
+                str(target_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
             await proc.communicate()
-            if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 5000:
+            
+            if target_path.exists() and target_path.stat().st_size > 0:
+                # Удаляем исходник
                 try: input_path.unlink()
                 except: pass
-                return DownloadResult(success=True, file_path=output_path, track_info=track_info)
-        except Exception as e: logger.error(f"FFmpeg conversion failed: {e}")
-        return DownloadResult(success=True, file_path=input_path, track_info=track_info)
+                
+                result.file_path = target_path
+                return result
+            
+        except Exception as e:
+            logger.error(f"Conversion error: {e}")
+            # Возвращаем исходный файл, если конвертация не удалась, но файл есть
+            return result
+            
+        return DownloadResult(success=False, error_message="Conversion failed")
