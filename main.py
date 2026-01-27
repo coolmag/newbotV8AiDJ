@@ -20,6 +20,7 @@ from config import get_settings, Settings
 from logging_setup import setup_logging
 from radio import RadioManager
 from youtube import YouTubeDownloader
+from spotify import SpotifyService # <--- IMPORT ADDED
 from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager 
@@ -36,36 +37,20 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("⚡ Aurora System Starting...")
     
-    # --- ДИАГНОСТИКА ОКРУЖЕНИЯ (НОВОЕ) ---
+    # --- ДИАГНОСТИКА ---
     logger.info("🛠 DIAGNOSTIC CHECK:")
+    if shutil.which("node"): logger.info("✅ Node.js DETECTED")
+    else: logger.error("❌ Node.js NOT FOUND")
     
-    # 1. Проверка Node.js
-    node_path = shutil.which("node") or shutil.which("nodejs")
-    if node_path:
-        try:
-            v = subprocess.check_output([node_path, "--version"]).decode().strip()
-            logger.info(f"✅ Node.js DETECTED: {v} at {node_path}")
-        except Exception as e:
-            logger.error(f"⚠️ Node.js found but failed: {e}")
-    else:
-        logger.error("❌ Node.js NOT FOUND! YouTube playback will fail.")
+    if shutil.which("ffmpeg"): logger.info("✅ FFmpeg DETECTED")
+    else: logger.error("❌ FFmpeg NOT FOUND")
 
-    # 2. Проверка FFmpeg
-    if shutil.which("ffmpeg"):
-        logger.info(f"✅ FFmpeg DETECTED")
-    else:
-        logger.error("❌ FFmpeg NOT FOUND!")
-    # --------------------------------------
-
-    if HAS_GENAI:
-        logger.info("🧠 NLP Engine: ACTIVE (Gemini)")
-    else:
-        logger.warning("🧠 NLP Engine: INACTIVE (Check Logs/Env)")
+    if HAS_GENAI: logger.info("🧠 NLP Engine: ACTIVE (Gemini)")
+    else: logger.warning("🧠 NLP Engine: INACTIVE")
 
     settings = get_settings()
     app.state.settings = settings
     
-    # Ensure directories
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
     
@@ -75,7 +60,10 @@ async def lifespan(app: FastAPI):
     downloader = YouTubeDownloader(settings, cache)
     app.state.downloader = downloader
     
-    # Build Telegram App
+    # Инициализация Spotify (FIXED)
+    spotify_service = SpotifyService(settings, downloader)
+    app.state.spotify_service = spotify_service
+    
     builder = Application.builder().token(settings.BOT_TOKEN).read_timeout(30).write_timeout(30)
     if settings.PROXY_URL: builder.proxy_url(settings.PROXY_URL)
     tg_app = builder.build()
@@ -83,10 +71,15 @@ async def lifespan(app: FastAPI):
 
     radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
     
-    # Setup Handlers
-    setup_handlers(app=tg_app, radio=radio_manager, settings=settings, downloader=downloader)
+    # Передаем spotify_service в хендлеры (FIXED)
+    setup_handlers(
+        app=tg_app, 
+        radio=radio_manager, 
+        settings=settings, 
+        downloader=downloader,
+        spotify_service=spotify_service 
+    )
     
-    # Commands
     commands = [
         BotCommand("radio", "🎲 Случайная волна"),
         BotCommand("play", "🔎 Найти трек"),
@@ -109,7 +102,6 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Shutdown
     await radio_manager.stop_all()
     await tg_app.stop()
     await tg_app.shutdown()
@@ -118,14 +110,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# --- ENDPOINTS ---
-
 @app.get("/api/ai/dj")
 async def ai_dj_generate(prompt: str, request: Request):
     logger.info(f"[AI Web] Prompt: {prompt}")
-    intro = await ChatManager.get_response(0, f"Intro for song: {prompt}", "User")
-    if not intro: intro = "Playing your track!"
-    
+    intro = await ChatManager.get_response(0, f"Intro for song: {prompt}", "User") or "Playing your track!"
     downloader = request.app.state.downloader
     tracks = await downloader.search(query=prompt, limit=10)
     return {"dj_intro": intro, "playlist": tracks}
@@ -133,15 +121,11 @@ async def ai_dj_generate(prompt: str, request: Request):
 @app.get("/audio/{video_id}.mp3")
 async def get_audio_file(video_id: str, request: Request):
     settings = request.app.state.settings
-    
-    # Ищем только готовый, сконвертированный MP3 файл
     file_path = settings.DOWNLOADS_DIR / f"{video_id}.mp3"
     
     if file_path.exists() and file_path.stat().st_size > 20000:
         return FileResponse(file_path)
-        
-    # Если файла нет, мгновенно отвечаем 404, не пытаясь скачивать
-    return JSONResponse(status_code=404, content={"error": "File not yet cached. Please wait and try again."})
+    return JSONResponse(status_code=404, content={"error": "File not yet cached."})
 
 @app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}
@@ -150,14 +134,9 @@ async def health(): return {"status": "ok", "uptime": get_uptime()}
 async def get_playlist(query: str, request: Request):
     downloader = request.app.state.downloader
     tracks = await downloader.search(query=query, limit=15)
-    
-    # --- PRE-CACHING ---
-    # Запускаем скачивание в фоне для всех найденных треков
     if tracks:
-        logger.info(f"Pre-caching {len(tracks)} tracks for query: '{query}'")
         for track in tracks:
             asyncio.create_task(downloader.download(track.identifier, track))
-    
     return {"playlist": tracks}
 
 @app.post("/telegram")
@@ -167,12 +146,8 @@ async def telegram_webhook(request: Request):
         data = await request.json()
         update = Update.de_json(data, tg_app.bot)
         asyncio.create_task(tg_app.process_update(update))
-    except json.JSONDecodeError:
-        logger.warning("Webhook received empty or invalid JSON. Likely a webhook validation ping.")
-    except ClientDisconnect:
-        logger.warning("Client disconnected before request body was read. Likely a webhook validation ping.")
-    except Exception as e:
-        logger.error(f"Webhook Update Error: {e!r}", exc_info=True)
+    except (json.JSONDecodeError, ClientDisconnect): pass
+    except Exception as e: logger.error(f"Webhook Error: {e!r}")
     return {"ok": True}
 
 app.mount("/", StaticFiles(directory="webapp", html=True), name="static")

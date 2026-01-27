@@ -24,11 +24,14 @@ class Settings(BaseSettings):
     COOKIES_CONTENT: str = ""
     PO_TOKEN: Optional[str] = None 
     
-    # Proxy (Восстановлено)
+    # Proxy
     PROXY_URL: Optional[str] = None
     
+    # Spotify Credentials (NEW)
+    SPOTIFY_CLIENT_ID: Optional[str] = None
+    SPOTIFY_CLIENT_SECRET: Optional[str] = None
+    
     # --- API Pools (Robust Parsing) ---
-    # Используем Union, чтобы Pydantic не падал при чтении пустой строки из ENV
     COBALT_INSTANCES: Union[List[str], str, None] = None
     PIPED_INSTANCES: Union[List[str], str, None] = None
 
@@ -53,9 +56,6 @@ class Settings(BaseSettings):
     @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
-        """
-        Безопасный парсинг списков URL.
-        """
         defaults = {
             "COBALT_INSTANCES": [
                 "https://cobalt.api.sc",
@@ -76,39 +76,26 @@ class Settings(BaseSettings):
         field_name = info.field_name
         default_list = defaults.get(field_name, [])
 
-        if v is None:
-            return default_list
-            
+        if v is None: return default_list
         if isinstance(v, str):
             v = v.strip()
-            if not v:
-                return default_list
+            if not v: return default_list
             try:
-                # Попытка парсинга JSON
                 parsed = json.loads(v)
-                if isinstance(parsed, list):
-                    return parsed
-            except json.JSONDecodeError:
-                pass
-            # Попытка парсинга CSV
+                if isinstance(parsed, list): return parsed
+            except json.JSONDecodeError: pass
             return [i.strip() for i in v.split(",") if i.strip()]
-
-        if isinstance(v, list):
-            return v if v else default_list
-            
+        if isinstance(v, list): return v if v else default_list
         return default_list
 
     @field_validator("ADMIN_ID_LIST", mode="before")
     @classmethod
     def _assemble_admin_ids(cls, v: Any, info: ValidationInfo) -> List[int]:
         admin_ids_str = info.data.get("ADMIN_IDS", "")
-        if not admin_ids_str: 
-            return []
-        try:
-            return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
-        except ValueError: 
-            return []
+        if not admin_ids_str: return []
+        try: return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
+        except ValueError: return []
 
-@lru_cache()
+ @lru_cache()
 def get_settings() -> Settings:
     return Settings()
