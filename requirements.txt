@@ -2,7 +2,6 @@ fastapi
 uvicorn[standard]
 python-telegram-bot
 google-genai==1.57.0
-# Берем напрямую из master, так как релизы в PyPI отстают от борьбы с блокировками
 yt-dlp @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz
 aiosqlite
 pydantic
@@ -11,4 +10,5 @@ httpx
 psutil
 nest-asyncio
 beautifulsoup4
+spotipy
 ffmpeg-python
