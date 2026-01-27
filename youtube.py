@@ -15,15 +15,15 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    Titanium Downloader v3 (Proxy Enhanced).
-    Priority: Cobalt -> Piped -> Direct (with Proxy Rotation)
+    Titanium Downloader v4 (Stable Search).
+    Search: Direct (No Proxy) - More reliable for metadata.
+    Download: Cobalt -> Piped -> Direct (Rotated Proxy).
     """
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         
-        # Cookies
         self.cookies_path = Path("cookies.txt")
         if self._settings.COOKIES_CONTENT:
             try:
@@ -31,7 +31,6 @@ class YouTubeDownloader:
                     f.write(self._settings.COOKIES_CONTENT)
             except: pass
 
-        # Proxies
         self.proxies = []
         self._load_proxies()
 
@@ -42,32 +41,28 @@ class YouTubeDownloader:
             'extract_flat': True, 
             'skip_download': True, 
             'ignoreerrors': True, 
-            'nocheckcertificate': True
+            'nocheckcertificate': True,
+            'socket_timeout': 10  # Fast fail
         }
 
         logger.info(f"🛡 Titanium Engine Active. Proxies loaded: {len(self.proxies)}")
 
     def _load_proxies(self):
-        """Загружает прокси из файла или ENV"""
-        # 1. Из ENV
         if self._settings.PROXY_URL:
             self.proxies.append(self._settings.PROXY_URL)
-            
-        # 2. Из файла
         if self._settings.PROXIES_FILE.exists():
             try:
                 with open(self._settings.PROXIES_FILE, "r") as f:
                     for line in f:
                         p = line.strip()
-                        if p and "://" in p:
-                            self.proxies.append(p)
-            except Exception as e:
-                logger.error(f"Failed to load proxies: {e}")
-        
-        # Перемешиваем
+                        if p and "://" in p: self.proxies.append(p)
+            except Exception as e: logger.error(f"Failed to load proxies: {e}")
         random.shuffle(self.proxies)
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
+        """
+        Поиск БЕЗ прокси. Прямое соединение надежнее для метаданных.
+        """
         cache_key = f"yt_search_v3:{query}"
         cached = await self._cache.get(cache_key)
         if cached: return cached
@@ -76,12 +71,8 @@ class YouTubeDownloader:
         
         loop = asyncio.get_running_loop()
         try:
-            # Для поиска используем рандомный прокси, если есть
-            opts = self.search_opts.copy()
-            if self.proxies:
-                opts['proxy'] = random.choice(self.proxies)
-
-            with yt_dlp.YoutubeDL(opts) as ydl:
+            # PROXY REMOVED HERE for stability
+            with yt_dlp.YoutubeDL(self.search_opts) as ydl:
                 info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_query, download=False))
             
             results = []
@@ -121,35 +112,27 @@ class YouTubeDownloader:
             res = await self._try_piped(video_id, track_info)
             if res.success: return await self._post_process(res)
 
-            # 3. Direct with Proxy Rotation
+            # 3. Direct (Rotated Proxy)
             res = await self._try_direct_rotated(video_id, track_info)
             return await self._post_process(res)
 
     async def _try_cobalt(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        logger.info(f"🧬 [Cobalt] Attempting {video_id}...")
-        
         instances = self._settings.COBALT_INSTANCES or []
         random.shuffle(instances)
-        # Ограничиваем кол-во попыток, чтобы не висеть долго
-        for base_url in instances[:3]:
+        for base_url in instances[:4]:
             try:
-                # logger.info(f"🧬 [Cobalt] Try {base_url} for {video_id}")
                 async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
                     payload = {"url": f"https://www.youtube.com/watch?v={video_id}", "aFormat": "mp3", "isAudioOnly": True}
                     resp = await client.post(f"{base_url}/api/json", json=payload, headers={"Accept": "application/json", "Content-Type": "application/json"})
-                    
                     if resp.status_code not in [200, 201]: continue
-                    
                     data = resp.json()
                     dl_url = data.get("url") or data.get("picker", [{}])[0].get("url")
                     if not dl_url: continue
-                    
                     temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_cobalt.mp3"
                     async with client.stream("GET", dl_url) as r:
                         r.raise_for_status()
                         with open(temp_path, "wb") as f:
                             async for chunk in r.aiter_bytes(): f.write(chunk)
-                            
                     if temp_path.stat().st_size > 5000:
                         logger.info(f"✅ [Cobalt] Success via {base_url}")
                         return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
@@ -159,27 +142,21 @@ class YouTubeDownloader:
         return DownloadResult(success=False, error_message="All Cobalt instances failed")
 
     async def _try_piped(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        logger.info(f"🧪 [Piped] Attempting {video_id}...")
-        
         instances = self._settings.PIPED_INSTANCES or []
         random.shuffle(instances)
-        for base_url in instances[:3]:
+        for base_url in instances[:4]:
             try:
-                # logger.info(f"🧪 [Piped] Try {base_url} for {video_id}")
                 async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
                     resp = await client.get(f"{base_url}/streams/{video_id}")
                     if resp.status_code != 200: continue
                     streams = resp.json().get("audioStreams", [])
                     if not streams: continue
-                    
                     dl_url = max(streams, key=lambda x: x.get("bitrate", 0)).get("url")
                     temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_piped.m4a"
-                    
                     async with client.stream("GET", dl_url) as r:
                         r.raise_for_status()
                         with open(temp_path, "wb") as f:
                             async for chunk in r.aiter_bytes(): f.write(chunk)
-                            
                     if temp_path.stat().st_size > 5000:
                         logger.info(f"✅ [Piped] Success via {base_url}")
                         return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
@@ -189,35 +166,20 @@ class YouTubeDownloader:
         return DownloadResult(success=False, error_message="All Piped instances failed")
 
     async def _try_direct_rotated(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
-        """Вращает прокси и пытается скачать через yt-dlp"""
         url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        # Список прокси для попыток (добавляем None для попытки без прокси, если вдруг повезет)
-        candidates = self.proxies[:3] if self.proxies else [None]
+        candidates = self.proxies[:5] if self.proxies else [None]
         if None not in candidates and not self.proxies: candidates.append(None)
         
         loop = asyncio.get_running_loop()
-        
         for proxy in candidates:
             proxy_log = proxy if proxy else "Direct"
             logger.info(f"⚠️ [Direct] Attempting {video_id} via {proxy_log}...")
-            
-            opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': str(self._settings.DOWNLOADS_DIR / f"{video_id}_direct.%(ext)s"),
-                'quiet': True,
-                'no_warnings': True,
-                'nocheckcertificate': True,
-                'extractor_args': {'youtube': {'player_client': ['android', 'ios']}},
-            }
+            opts = {'format': 'bestaudio/best', 'outtmpl': str(self._settings.DOWNLOADS_DIR / f"{video_id}_direct.%(ext)s"), 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True, 'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}}
             if proxy: opts['proxy'] = proxy
             if self.cookies_path.exists(): opts['cookiefile'] = str(self.cookies_path)
-            
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     await loop.run_in_executor(None, lambda: ydl.download([url]))
-                
-                # Check file
                 for f in self._settings.DOWNLOADS_DIR.glob(f"{video_id}_direct.*"):
                     if f.stat().st_size > 10000:
                         logger.info(f"✅ [Direct] Success via {proxy_log}")
