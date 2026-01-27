@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Union
 from functools import lru_cache
 import logging
 import os
@@ -24,9 +24,10 @@ class Settings(BaseSettings):
     COOKIES_CONTENT: str = ""
     PO_TOKEN: Optional[str] = None 
     
-    # API Pools (с защитой от сбоев парсинга)
-    COBALT_INSTANCES: List[str] = []
-    PIPED_INSTANCES: List[str] = []
+    # --- API Pools (CRITICAL FIX) ---
+    # Используем Union, чтобы Pydantic не падал при чтении пустой строки из ENV
+    COBALT_INSTANCES: Union[List[str], str, None] = None
+    PIPED_INSTANCES: Union[List[str], str, None] = None
 
     GEMINI_API_KEY: Optional[str] = None
     VK_LOGIN: Optional[str] = None
@@ -50,10 +51,9 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
         """
-        Безопасный парсинг списков инстансов.
-        Если в ENV пусто или мусор - возвращает жестко заданные дефолты.
+        Безопасный парсинг. Возвращает список URL.
         """
-        # Жестко заданные резервные списки (DEFAULTS)
+        # Хардкод дефолтных списков (Спасательный круг)
         defaults = {
             "COBALT_INSTANCES": [
                 "https://cobalt.api.sc",
@@ -74,21 +74,28 @@ class Settings(BaseSettings):
         field_name = info.field_name
         default_list = defaults.get(field_name, [])
 
-        # Если значение пришло пустым или None
+        # 1. Если пришел None
         if v is None:
             return default_list
-        
+            
+        # 2. Если пришла строка (пустая или JSON или CSV)
         if isinstance(v, str):
             v = v.strip()
-            if not v: # Пустая строка
+            if not v: # Пустая строка -> дефолт
                 return default_list
+            
             try:
-                # Пробуем как JSON (например '["url1", "url2"]')
-                return json.loads(v)
+                # Попытка парсинга JSON
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
             except json.JSONDecodeError:
-                # Пробуем как CSV (url1,url2)
-                return [i.strip() for i in v.split(",") if i.strip()]
-        
+                pass
+            
+            # Попытка парсинга через запятую
+            return [i.strip() for i in v.split(",") if i.strip()]
+
+        # 3. Если уже список
         if isinstance(v, list):
             return v if v else default_list
             
