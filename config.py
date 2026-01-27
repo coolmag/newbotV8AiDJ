@@ -46,29 +46,24 @@ class Settings(BaseSettings):
     TEMP_AUDIO_DIR: Path = BASE_DIR / "temp_audio"
     CACHE_DB_PATH: Path = BASE_DIR / "cache.db"
     COOKIES_FILE: Path = BASE_DIR / "cookies.txt"
+    PROXIES_FILE: Path = BASE_DIR / "working_proxies.txt"
     
     LOG_LEVEL: str = "INFO"
     MAX_CONCURRENT_DOWNLOADS: int = 3
-    DOWNLOAD_TIMEOUT: int = 120  # Увеличено до 120 сек
+    DOWNLOAD_TIMEOUT: int = 120
 
     # --- ВАЛИДАТОРЫ ---
 
     @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
-        # ULTIMATE LIST 2026
+        # CLEAN LIST 2026 (Removed dead domains)
         defaults = {
             "COBALT_INSTANCES": [
-                "https://cobalt.api.sc",
-                "https://co.wuk.sh",
-                "https://api.cobalt.7o7.tech",
-                "https://cobalt.tools",
-                "https://cobalt.xy24.eu.org",
-                "https://dl.khub.ntt.jp",
-                "https://cobalt.qiong.us",
-                "https://save.sisyphos.git-repos.de",
-                "https://cobalt.kwiatekmiki.pl",
-                "https://cobalt.synaptik.io"
+                "https://api.cobalt.tools",       # Official API
+                "https://cobalt.kwiatekmiki.pl",  # Backup 1
+                "https://cobalt.slavk.net",       # Backup 2
+                "https://cobalt.armadyne.net"     # Backup 3
             ],
             "PIPED_INSTANCES": [
                 "https://pipedapi.kavin.rocks",
@@ -80,9 +75,7 @@ class Settings(BaseSettings):
                 "https://api.piped.projectsegfau.lt",
                 "https://pipedapi.moomoo.me",
                 "https://pipedapi.leptons.xyz",
-                "https://pipedapi.adminforge.de",
-                "https://pipedapi.ducks.party",
-                "https://pipedapi.reallyaweso.me"
+                "https://pipedapi.adminforge.de"
             ]
         }
         
