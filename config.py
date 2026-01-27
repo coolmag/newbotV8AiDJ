@@ -105,6 +105,6 @@ class Settings(BaseSettings):
         try: return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
         except ValueError: return []
 
- @lru_cache()
+@lru_cache()
 def get_settings() -> Settings:
     return Settings()
