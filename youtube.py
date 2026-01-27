@@ -15,9 +15,8 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    Titanium Downloader v9 (Direct Force).
-    Strategy: Direct download using Rotated Proxies + Optimized Headers.
-    Removed dead Cobalt/Piped logic to save time.
+    Titanium Downloader v10 (Invidious + Android Protocol).
+    Priority: Invidious -> Piped -> Cobalt -> Direct (Android)
     """
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
@@ -45,7 +44,7 @@ class YouTubeDownloader:
             'socket_timeout': 10
         }
 
-        logger.info(f"🛡 Titanium Direct Engine. Proxies loaded: {len(self.proxies)}")
+        logger.info(f"🛡 Titanium v10. Proxies: {len(self.proxies)} | Invidious: {len(self._settings.INVIDIOUS_INSTANCES)}")
 
     def _load_proxies(self):
         if self._settings.PROXY_URL:
@@ -55,7 +54,9 @@ class YouTubeDownloader:
                 with open(self._settings.PROXIES_FILE, "r") as f:
                     for line in f:
                         p = line.strip()
-                        if p and "://" in p: self.proxies.append(p)
+                        # YT-DLP has issues with SOCKS4 on some systems, prefer HTTP/SOCKS5
+                        if p and "://" in p and "socks4" not in p: 
+                            self.proxies.append(p)
             except Exception as e: logger.error(f"Failed to load proxies: {e}")
         random.shuffle(self.proxies)
 
@@ -99,52 +100,170 @@ class YouTubeDownloader:
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         async with self.semaphore:
-            # ONLY DIRECT ROTATION
+            # 1. Invidious (NEW & Strong)
+            res = await self._try_invidious(video_id, track_info)
+            if res.success: return await self._post_process(res)
+
+            # 2. Piped
+            res = await self._try_piped(video_id, track_info)
+            if res.success: return await self._post_process(res)
+
+            # 3. Cobalt
+            res = await self._try_cobalt(video_id, track_info)
+            if res.success: return await self._post_process(res)
+
+            # 4. Direct (Android Protocol)
             res = await self._try_direct_rotated(video_id, track_info)
             return await self._post_process(res)
 
+    async def _try_invidious(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        instances = self._settings.INVIDIOUS_INSTANCES or []
+        random.shuffle(instances)
+        
+        for base_url in instances[:6]:
+            try:
+                # logger.info(f"👽 [Invidious] Try {base_url}")
+                async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
+                    # Invidious API v1
+                    resp = await client.get(f"{base_url}/api/v1/videos/{video_id}")
+                    if resp.status_code != 200: 
+                        logger.warning(f"[Invidious] {base_url} status {resp.status_code}: {resp.text[:100]}")
+                        continue
+                    
+                    data = resp.json()
+                    # Ищем adaptiveFormats (audio only)
+                    formats = data.get("adaptiveFormats", [])
+                    audio_formats = [f for f in formats if "audio" in f.get("type", "")]
+                    
+                    if not audio_formats: 
+                        logger.warning(f"[Invidious] {base_url} no audio formats found.")
+                        continue
+                    
+                    # Лучший битрейт
+                    best_audio = max(audio_formats, key=lambda x: int(x.get("bitrate", 0)))
+                    dl_url = best_audio.get("url")
+                    
+                    if not dl_url: 
+                        logger.warning(f"[Invidious] {base_url} no download URL found.")
+                        continue
+                        
+                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_inv.m4a"
+                    async with client.stream("GET", dl_url) as r:
+                        r.raise_for_status()
+                        with open(temp_path, "wb") as f:
+                            async for chunk in r.aiter_bytes(): f.write(chunk)
+                            
+                    if temp_path.stat().st_size > 5000:
+                        logger.info(f"✅ [Invidious] Success via {base_url}")
+                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
+            except Exception as e: 
+                logger.warning(f"[Invidious] Error on {base_url}: {str(e)[:100]}")
+                continue
+        return DownloadResult(success=False, error_message="All Invidious instances failed")
+
+    async def _try_cobalt(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        instances = self._settings.COBALT_INSTANCES or []
+        random.shuffle(instances)
+        
+        for base_url in instances[:3]:
+            try:
+                async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                    payload = {"url": f"https://www.youtube.com/watch?v={video_id}", "downloadMode": "audio"}
+                    headers = {"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+                    
+                    # Try v10 style first
+                    resp = await client.post(f"{base_url}", json=payload, headers=headers)
+                    if resp.status_code == 404: # Try v7 style
+                         resp = await client.post(f"{base_url}/api/json", json={"url": payload["url"], "isAudioOnly": True}, headers=headers)
+
+                    if resp.status_code not in [200, 201]: 
+                        logger.warning(f"[Cobalt] {base_url} status {resp.status_code}: {resp.text[:100]}")
+                        continue
+                    
+                    data = resp.json()
+                    dl_url = data.get("url") or data.get("picker", [{}])[0].get("url")
+                    
+                    if not dl_url: 
+                        logger.warning(f"[Cobalt] {base_url} missing URL. Data: {str(data)[:100]}")
+                        continue
+                    
+                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_cobalt.mp3"
+                    async with client.stream("GET", dl_url) as r:
+                        r.raise_for_status()
+                        with open(temp_path, "wb") as f:
+                            async for chunk in r.aiter_bytes(): f.write(chunk)
+                            
+                    if temp_path.stat().st_size > 5000:
+                        logger.info(f"✅ [Cobalt] Success via {base_url}")
+                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
+            except Exception as e: 
+                logger.warning(f"[Cobalt] Error on {base_url}: {str(e)[:100]}")
+                continue
+        return DownloadResult(success=False, error_message="All Cobalt instances failed")
+
+    async def _try_piped(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        instances = self._settings.PIPED_INSTANCES or []
+        random.shuffle(instances)
+        for base_url in instances[:4]:
+            try:
+                async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
+                    resp = await client.get(f"{base_url}/streams/{video_id}")
+                    if resp.status_code != 200: 
+                        logger.warning(f"[Piped] {base_url} status {resp.status_code}: {resp.text[:100]}")
+                        continue
+                    streams = resp.json().get("audioStreams", [])
+                    if not streams: 
+                        logger.warning(f"[Piped] {base_url} no audio streams found.")
+                        continue
+                    dl_url = max(streams, key=lambda x: x.get("bitrate", 0)).get("url")
+                    
+                    if not dl_url: 
+                        logger.warning(f"[Piped] {base_url} no download URL found.")
+                        continue
+
+                    temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_piped.m4a"
+                    async with client.stream("GET", dl_url) as r:
+                        r.raise_for_status()
+                        with open(temp_path, "wb") as f:
+                            async for chunk in r.aiter_bytes(): f.write(chunk)
+                    if temp_path.stat().st_size > 5000:
+                        logger.info(f"✅ [Piped] Success via {base_url}")
+                        return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
+            except Exception as e: 
+                logger.warning(f"[Piped] Error on {base_url}: {str(e)[:100]}")
+                continue
+        return DownloadResult(success=False, error_message="All Piped instances failed")
+
     async def _try_direct_rotated(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
         url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        # Try proxies, then direct as last resort
-        candidates = self.proxies[:8] if self.proxies else []
-        candidates.append(None) 
+        candidates = self.proxies[:6] if self.proxies else []
+        candidates.append(None)
         
         loop = asyncio.get_running_loop()
-        
         for proxy in candidates:
             proxy_log = proxy if proxy else "Direct"
             logger.info(f"⚠️ [Direct] Attempting {video_id} via {proxy_log}...")
             
+            # ANDROID CLIENT STRATEGY
             opts = {
-                # Try specific m4a first (itag 140), then any best audio
-                'format': '140/bestaudio/best', 
+                'format': 'bestaudio/best',
                 'outtmpl': str(self._settings.DOWNLOADS_DIR / f"{video_id}_direct.%(ext)s"),
                 'quiet': True,
                 'no_warnings': True,
                 'nocheckcertificate': True,
-                'ignoreerrors': True,
-                # Mobile User Agent often bypasses 'Sign in' checks
-                'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['ios', 'android'],
-                        'player_skip': ['webpage', 'configs', 'js']
+                        'player_client': ['android', 'web_creator'], # Changed from ios to android
+                        'player_skip': ['webpage', 'configs']
                     }
                 }
             }
-            
-            if proxy: 
-                opts['proxy'] = proxy
-            
-            if self.cookies_path.exists(): 
-                opts['cookiefile'] = str(self.cookies_path)
+            if proxy: opts['proxy'] = proxy
+            if self.cookies_path.exists(): opts['cookiefile'] = str(self.cookies_path)
             
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     await loop.run_in_executor(None, lambda: ydl.download([url]))
-                
-                # Check for ANY file downloaded
                 for f in self._settings.DOWNLOADS_DIR.glob(f"{video_id}_direct.*"):
                     if f.stat().st_size > 5000:
                         logger.info(f"✅ [Direct] Success via {proxy_log}")
@@ -152,15 +271,14 @@ class YouTubeDownloader:
             except Exception as e:
                 logger.warning(f"[Direct] Failed via {proxy_log}: {str(e)[:100]}")
                 continue
-                
-        return DownloadResult(success=False, error_message="All proxies failed")
+        return DownloadResult(success=False, error_message="All methods failed")
 
     async def _post_process(self, result: DownloadResult) -> DownloadResult:
         if not result.success or not result.file_path: return result
         target = self._settings.DOWNLOADS_DIR / f"{result.track_info.identifier}.mp3"
         if result.file_path.suffix == ".mp3" and result.file_path.name == target.name: return result
         try:
-            proc = await asyncio.create_subprocess_exec('ffmpeg', '-y', '-i', str(result.file_path), '-vn', '-acodec', 'libmp3lame', '-q:a', '4', str(target), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            proc = await asyncio.create_subprocess_exec('ffmpeg', '-y', '-i', str(result.file_path), '-vn', '-acodec', 'libmp3lame', '-q:a', '2', str(target), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             await proc.wait()
             if target.exists() and target.stat().st_size > 0:
                 try: result.file_path.unlink() 

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # API Pools
     COBALT_INSTANCES: Union[List[str], str, None] = None
     PIPED_INSTANCES: Union[List[str], str, None] = None
+    INVIDIOUS_INSTANCES: Union[List[str], str, None] = None
 
     GEMINI_API_KEY: Optional[str] = None
     VK_LOGIN: Optional[str] = None
@@ -54,28 +55,30 @@ class Settings(BaseSettings):
 
     # --- ВАЛИДАТОРЫ ---
 
-    @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", mode="before")
+    @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", "INVIDIOUS_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
-        # RESURRECTION LIST 2026
+        # ULTIMATE SURVIVAL LIST 2026
         defaults = {
             "COBALT_INSTANCES": [
-                "https://api.cobalt.tools",       # Official
-                "https://cobalt.awery.net",       # Reliable Mirror
-                "https://cobalt.root.sx",         # Reliable Mirror
-                "https://cobalt.lanex.dev",       # Reliable Mirror
-                "https://cobalt.154.53.53.153.sslip.io" # Direct IP Mirror
+                "https://api.cobalt.tools",
+                "https://cobalt.ducks.party",
+                "https://cobalt.kulko.eu"
             ],
             "PIPED_INSTANCES": [
                 "https://pipedapi.kavin.rocks",
                 "https://api.piped.otter.sh",
-                "https://pipedapi.drgns.space",
-                "https://api.piped.projectsegfau.lt",
-                "https://pipedapi.adminforge.de",
-                "https://pipedapi.ducks.party",
-                "https://api.piped.yt",
-                "https://pipedapi.system41.space",
-                "https://pipedapi.leptons.xyz"
+                "https://pipedapi.drgns.space"
+            ],
+            # NEW: INVIDIOUS POOL
+            "INVIDIOUS_INSTANCES": [
+                "https://inv.tux.pizza",
+                "https://invidious.drgns.space",
+                "https://vid.puffyan.us",
+                "https://inv.zzls.xyz",
+                "https://invidious.projectsegfau.lt",
+                "https://invidious.privacydev.net",
+                "https://iv.ggtyler.dev"
             ]
         }
         
@@ -102,6 +105,6 @@ class Settings(BaseSettings):
         try: return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
         except ValueError: return []
 
-@lru_cache()
+ @lru_cache()
 def get_settings() -> Settings:
     return Settings()
