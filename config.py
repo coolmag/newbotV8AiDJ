@@ -27,11 +27,11 @@ class Settings(BaseSettings):
     # Proxy
     PROXY_URL: Optional[str] = None
     
-    # Spotify Credentials
+    # Spotify
     SPOTIFY_CLIENT_ID: Optional[str] = None
     SPOTIFY_CLIENT_SECRET: Optional[str] = None
     
-    # --- API Pools (Robust Parsing) ---
+    # API Pools
     COBALT_INSTANCES: Union[List[str], str, None] = None
     PIPED_INSTANCES: Union[List[str], str, None] = None
 
@@ -49,13 +49,14 @@ class Settings(BaseSettings):
     
     LOG_LEVEL: str = "INFO"
     MAX_CONCURRENT_DOWNLOADS: int = 3
-    DOWNLOAD_TIMEOUT: int = 60
+    DOWNLOAD_TIMEOUT: int = 120  # Увеличено до 120 сек
 
     # --- ВАЛИДАТОРЫ ---
 
     @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
+        # ULTIMATE LIST 2026
         defaults = {
             "COBALT_INSTANCES": [
                 "https://cobalt.api.sc",
@@ -63,49 +64,50 @@ class Settings(BaseSettings):
                 "https://api.cobalt.7o7.tech",
                 "https://cobalt.tools",
                 "https://cobalt.xy24.eu.org",
+                "https://dl.khub.ntt.jp",
+                "https://cobalt.qiong.us",
+                "https://save.sisyphos.git-repos.de",
+                "https://cobalt.kwiatekmiki.pl",
+                "https://cobalt.synaptik.io"
             ],
             "PIPED_INSTANCES": [
                 "https://pipedapi.kavin.rocks",
                 "https://api.piped.otter.sh",
                 "https://pipedapi.drgns.space",
                 "https://api.piped.yt",
-                "https://pipedapi.nosebs.ru"
+                "https://pipedapi.nosebs.ru",
+                "https://piped-api.privacy.com.de",
+                "https://api.piped.projectsegfau.lt",
+                "https://pipedapi.moomoo.me",
+                "https://pipedapi.leptons.xyz",
+                "https://pipedapi.adminforge.de",
+                "https://pipedapi.ducks.party",
+                "https://pipedapi.reallyaweso.me"
             ]
         }
         
         field_name = info.field_name
         default_list = defaults.get(field_name, [])
 
-        if v is None:
-            return default_list
-            
+        if v is None: return default_list
         if isinstance(v, str):
             v = v.strip()
-            if not v:
-                return default_list
+            if not v: return default_list
             try:
                 parsed = json.loads(v)
-                if isinstance(parsed, list):
-                    return parsed
-            except json.JSONDecodeError:
-                pass
+                if isinstance(parsed, list): return parsed
+            except json.JSONDecodeError: pass
             return [i.strip() for i in v.split(",") if i.strip()]
-
-        if isinstance(v, list):
-            return v if v else default_list
-            
+        if isinstance(v, list): return v if v else default_list
         return default_list
 
     @field_validator("ADMIN_ID_LIST", mode="before")
     @classmethod
     def _assemble_admin_ids(cls, v: Any, info: ValidationInfo) -> List[int]:
         admin_ids_str = info.data.get("ADMIN_IDS", "")
-        if not admin_ids_str: 
-            return []
-        try:
-            return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
-        except ValueError: 
-            return []
+        if not admin_ids_str: return []
+        try: return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
+        except ValueError: return []
 
 @lru_cache()
 def get_settings() -> Settings:
