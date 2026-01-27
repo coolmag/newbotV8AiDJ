@@ -57,34 +57,19 @@ class Settings(BaseSettings):
     @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
-        # CLEAN GOLD LIST 2026
+        # SNIPER LIST 2026 (Only High-Uptime)
         defaults = {
             "COBALT_INSTANCES": [
-                # Official & High Uptime
-                "https://api.cobalt.tools",
-                "https://cobalt.7o7.tech",
-                "https://api.cobalt.7o7.tech",
-                # Community
-                "https://cobalt.xy24.eu.org",
-                "https://dl.khub.ntt.jp",
-                "https://cobalt.qiong.us",
-                "https://server.kncdn.org", 
-                "https://cobalt.kinuseka.net",
-                "https://cobalt.154.53.53.153.sslip.io"
+                "https://api.cobalt.tools",       # Official (№1 Priority)
+                "https://cobalt.ducks.party",     # Stable Mirror
+                "https://cobalt.kulko.eu",        # EU Mirror
+                "https://cobalt.gomhy.com"        # Backup
             ],
             "PIPED_INSTANCES": [
-                "https://pipedapi.kavin.rocks",
-                "https://api.piped.otter.sh",
+                "https://pipedapi.kavin.rocks",   # Official (Stable)
+                "https://api.piped.otter.sh",     # Fast
                 "https://pipedapi.drgns.space",
-                "https://api.piped.yt",
-                "https://pipedapi.nosebs.ru",
-                "https://piped-api.privacy.com.de",
-                "https://api.piped.projectsegfau.lt",
-                "https://pipedapi.moomoo.me",
-                "https://pipedapi.leptons.xyz",
-                "https://pipedapi.adminforge.de",
-                "https://pipedapi.ducks.party",
-                "https://api.piped.system41.space"
+                "https://api.piped.projectsegfau.lt"
             ]
         }
         

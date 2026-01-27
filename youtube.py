@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    Titanium Downloader v5 (Aggressive).
-    Iterates through ALL available instances until success.
+    Titanium Downloader v6 (Sniper Edition).
     """
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
@@ -41,10 +40,10 @@ class YouTubeDownloader:
             'skip_download': True, 
             'ignoreerrors': True, 
             'nocheckcertificate': True,
-            'socket_timeout': 15  # Fast fail
+            'socket_timeout': 10
         }
 
-        logger.info(f"🛡 Titanium Engine Active. Proxies: {len(self.proxies)} | Cobalt: {len(self._settings.COBALT_INSTANCES)} | Piped: {len(self._settings.PIPED_INSTANCES)}")
+        logger.info(f"🛡 Titanium Engine Active. Proxies: {len(self.proxies)} | Cobalt: {len(self._settings.COBALT_INSTANCES)}")
 
     def _load_proxies(self):
         if self._settings.PROXY_URL:
@@ -98,29 +97,43 @@ class YouTubeDownloader:
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         async with self.semaphore:
-            # 1. Cobalt (Try ALL)
+            # 1. Cobalt (Sniper Mode)
             res = await self._try_cobalt(video_id, track_info)
             if res.success: return await self._post_process(res)
 
-            # 2. Piped (Try ALL)
+            # 2. Piped (Backup)
             res = await self._try_piped(video_id, track_info)
             if res.success: return await self._post_process(res)
 
-            # 3. Direct (Rotated Proxy)
+            # 3. Direct (Proxy + IPv6 try)
             res = await self._try_direct_rotated(video_id, track_info)
             return await self._post_process(res)
 
     async def _try_cobalt(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+        # Приоритет официальному инстансу
         instances = self._settings.COBALT_INSTANCES or []
-        random.shuffle(instances)
+        main_instance = "https://api.cobalt.tools"
         
-        # TRY ALL INSTANCES
-        for base_url in instances:
+        others = [i for i in instances if i != main_instance]
+        random.shuffle(others)
+        
+        # Сначала официальный, потом остальные
+        target_list = [main_instance] + others
+        
+        for base_url in target_list:
             try:
+                # logger.info(f"🧬 [Cobalt] Try {base_url}")
                 async with httpx.AsyncClient(timeout=45.0, verify=False, follow_redirects=True) as client:
                     payload = {"url": f"https://www.youtube.com/watch?v={video_id}", "aFormat": "mp3", "isAudioOnly": True}
-                    resp = await client.post(f"{base_url}/api/json", json=payload, headers={"Accept": "application/json", "Content-Type": "application/json"})
                     
+                    # Cobalt API Tools требует специфичных заголовков
+                    headers = {
+                        "Accept": "application/json", 
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    }
+                    
+                    resp = await client.post(f"{base_url}/api/json", json=payload, headers=headers)
                     if resp.status_code not in [200, 201]: continue
                     
                     data = resp.json()
@@ -144,9 +157,7 @@ class YouTubeDownloader:
     async def _try_piped(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
         instances = self._settings.PIPED_INSTANCES or []
         random.shuffle(instances)
-        
-        # TRY ALL INSTANCES
-        for base_url in instances:
+        for base_url in instances[:3]:
             try:
                 async with httpx.AsyncClient(timeout=25.0, verify=False) as client:
                     resp = await client.get(f"{base_url}/streams/{video_id}")
@@ -169,17 +180,32 @@ class YouTubeDownloader:
 
     async def _try_direct_rotated(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
         url = f"https://www.youtube.com/watch?v={video_id}"
-        # Пробуем 7 прокси + прямой
-        candidates = self.proxies[:7] if self.proxies else []
-        candidates.append(None) 
+        candidates = self.proxies[:5] if self.proxies else []
+        candidates.append(None)
         
         loop = asyncio.get_running_loop()
         for proxy in candidates:
             proxy_log = proxy if proxy else "Direct"
             logger.info(f"⚠️ [Direct] Attempting {video_id} via {proxy_log}...")
-            opts = {'format': 'bestaudio/best', 'outtmpl': str(self._settings.DOWNLOADS_DIR / f"{video_id}_direct.%(ext)s"), 'quiet': True, 'no_warnings': True, 'nocheckcertificate': True, 'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}}
-            if proxy: opts['proxy'] = proxy
+            
+            opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': str(self._settings.DOWNLOADS_DIR / f"{video_id}_direct.%(ext)s"),
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                # Пытаемся заставить работать IPv6 (иногда помогает обойти бан)
+                'source_address': '::', 
+                'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
+            }
+            
+            if proxy: 
+                opts['proxy'] = proxy
+                # С прокси IPv6 обычно не работает, убираем
+                if 'source_address' in opts: del opts['source_address']
+                
             if self.cookies_path.exists(): opts['cookiefile'] = str(self.cookies_path)
+            
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     await loop.run_in_executor(None, lambda: ydl.download([url]))
