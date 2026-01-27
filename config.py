@@ -24,7 +24,10 @@ class Settings(BaseSettings):
     COOKIES_CONTENT: str = ""
     PO_TOKEN: Optional[str] = None 
     
-    # --- API Pools (CRITICAL FIX) ---
+    # Proxy (Восстановлено)
+    PROXY_URL: Optional[str] = None
+    
+    # --- API Pools (Robust Parsing) ---
     # Используем Union, чтобы Pydantic не падал при чтении пустой строки из ENV
     COBALT_INSTANCES: Union[List[str], str, None] = None
     PIPED_INSTANCES: Union[List[str], str, None] = None
@@ -51,9 +54,8 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
         """
-        Безопасный парсинг. Возвращает список URL.
+        Безопасный парсинг списков URL.
         """
-        # Хардкод дефолтных списков (Спасательный круг)
         defaults = {
             "COBALT_INSTANCES": [
                 "https://cobalt.api.sc",
@@ -74,16 +76,13 @@ class Settings(BaseSettings):
         field_name = info.field_name
         default_list = defaults.get(field_name, [])
 
-        # 1. Если пришел None
         if v is None:
             return default_list
             
-        # 2. Если пришла строка (пустая или JSON или CSV)
         if isinstance(v, str):
             v = v.strip()
-            if not v: # Пустая строка -> дефолт
+            if not v:
                 return default_list
-            
             try:
                 # Попытка парсинга JSON
                 parsed = json.loads(v)
@@ -91,11 +90,9 @@ class Settings(BaseSettings):
                     return parsed
             except json.JSONDecodeError:
                 pass
-            
-            # Попытка парсинга через запятую
+            # Попытка парсинга CSV
             return [i.strip() for i in v.split(",") if i.strip()]
 
-        # 3. Если уже список
         if isinstance(v, list):
             return v if v else default_list
             
