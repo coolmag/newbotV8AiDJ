@@ -57,19 +57,25 @@ class Settings(BaseSettings):
     @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
-        # SNIPER LIST 2026 (Only High-Uptime)
+        # RESURRECTION LIST 2026
         defaults = {
             "COBALT_INSTANCES": [
-                "https://api.cobalt.tools",       # Official (№1 Priority)
-                "https://cobalt.ducks.party",     # Stable Mirror
-                "https://cobalt.kulko.eu",        # EU Mirror
-                "https://cobalt.gomhy.com"        # Backup
+                "https://api.cobalt.tools",       # Official
+                "https://cobalt.awery.net",       # Reliable Mirror
+                "https://cobalt.root.sx",         # Reliable Mirror
+                "https://cobalt.lanex.dev",       # Reliable Mirror
+                "https://cobalt.154.53.53.153.sslip.io" # Direct IP Mirror
             ],
             "PIPED_INSTANCES": [
-                "https://pipedapi.kavin.rocks",   # Official (Stable)
-                "https://api.piped.otter.sh",     # Fast
+                "https://pipedapi.kavin.rocks",
+                "https://api.piped.otter.sh",
                 "https://pipedapi.drgns.space",
-                "https://api.piped.projectsegfau.lt"
+                "https://api.piped.projectsegfau.lt",
+                "https://pipedapi.adminforge.de",
+                "https://pipedapi.ducks.party",
+                "https://api.piped.yt",
+                "https://pipedapi.system41.space",
+                "https://pipedapi.leptons.xyz"
             ]
         }
         
