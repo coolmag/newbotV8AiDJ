@@ -57,13 +57,20 @@ class Settings(BaseSettings):
     @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
-        # CLEAN LIST 2026 (Removed dead domains)
+        # CLEAN GOLD LIST 2026
         defaults = {
             "COBALT_INSTANCES": [
-                "https://api.cobalt.tools",       # Official API
-                "https://cobalt.kwiatekmiki.pl",  # Backup 1
-                "https://cobalt.slavk.net",       # Backup 2
-                "https://cobalt.armadyne.net"     # Backup 3
+                # Official & High Uptime
+                "https://api.cobalt.tools",
+                "https://cobalt.7o7.tech",
+                "https://api.cobalt.7o7.tech",
+                # Community
+                "https://cobalt.xy24.eu.org",
+                "https://dl.khub.ntt.jp",
+                "https://cobalt.qiong.us",
+                "https://server.kncdn.org", 
+                "https://cobalt.kinuseka.net",
+                "https://cobalt.154.53.53.153.sslip.io"
             ],
             "PIPED_INSTANCES": [
                 "https://pipedapi.kavin.rocks",
@@ -75,7 +82,9 @@ class Settings(BaseSettings):
                 "https://api.piped.projectsegfau.lt",
                 "https://pipedapi.moomoo.me",
                 "https://pipedapi.leptons.xyz",
-                "https://pipedapi.adminforge.de"
+                "https://pipedapi.adminforge.de",
+                "https://pipedapi.ducks.party",
+                "https://api.piped.system41.space"
             ]
         }
         

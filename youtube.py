@@ -15,9 +15,8 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    Titanium Downloader v4 (Stable Search).
-    Search: Direct (No Proxy) - More reliable for metadata.
-    Download: Cobalt -> Piped -> Direct (Rotated Proxy).
+    Titanium Downloader v5 (Aggressive).
+    Iterates through ALL available instances until success.
     """
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
@@ -42,10 +41,10 @@ class YouTubeDownloader:
             'skip_download': True, 
             'ignoreerrors': True, 
             'nocheckcertificate': True,
-            'socket_timeout': 10  # Fast fail
+            'socket_timeout': 15  # Fast fail
         }
 
-        logger.info(f"🛡 Titanium Engine Active. Proxies loaded: {len(self.proxies)}")
+        logger.info(f"🛡 Titanium Engine Active. Proxies: {len(self.proxies)} | Cobalt: {len(self._settings.COBALT_INSTANCES)} | Piped: {len(self._settings.PIPED_INSTANCES)}")
 
     def _load_proxies(self):
         if self._settings.PROXY_URL:
@@ -60,18 +59,13 @@ class YouTubeDownloader:
         random.shuffle(self.proxies)
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
-        """
-        Поиск БЕЗ прокси. Прямое соединение надежнее для метаданных.
-        """
         cache_key = f"yt_search_v3:{query}"
         cached = await self._cache.get(cache_key)
         if cached: return cached
 
         search_query = f"ytsearch{limit}:{query}" if "http" not in query else query
-        
         loop = asyncio.get_running_loop()
         try:
-            # PROXY REMOVED HERE for stability
             with yt_dlp.YoutubeDL(self.search_opts) as ydl:
                 info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_query, download=False))
             
@@ -104,11 +98,11 @@ class YouTubeDownloader:
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         async with self.semaphore:
-            # 1. Cobalt
+            # 1. Cobalt (Try ALL)
             res = await self._try_cobalt(video_id, track_info)
             if res.success: return await self._post_process(res)
 
-            # 2. Piped
+            # 2. Piped (Try ALL)
             res = await self._try_piped(video_id, track_info)
             if res.success: return await self._post_process(res)
 
@@ -119,20 +113,26 @@ class YouTubeDownloader:
     async def _try_cobalt(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
         instances = self._settings.COBALT_INSTANCES or []
         random.shuffle(instances)
-        for base_url in instances[:4]:
+        
+        # TRY ALL INSTANCES
+        for base_url in instances:
             try:
-                async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                async with httpx.AsyncClient(timeout=45.0, verify=False, follow_redirects=True) as client:
                     payload = {"url": f"https://www.youtube.com/watch?v={video_id}", "aFormat": "mp3", "isAudioOnly": True}
                     resp = await client.post(f"{base_url}/api/json", json=payload, headers={"Accept": "application/json", "Content-Type": "application/json"})
+                    
                     if resp.status_code not in [200, 201]: continue
+                    
                     data = resp.json()
                     dl_url = data.get("url") or data.get("picker", [{}])[0].get("url")
                     if not dl_url: continue
+                    
                     temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_cobalt.mp3"
                     async with client.stream("GET", dl_url) as r:
                         r.raise_for_status()
                         with open(temp_path, "wb") as f:
                             async for chunk in r.aiter_bytes(): f.write(chunk)
+                            
                     if temp_path.stat().st_size > 5000:
                         logger.info(f"✅ [Cobalt] Success via {base_url}")
                         return DownloadResult(success=True, file_path=temp_path, track_info=track_info)
@@ -144,9 +144,11 @@ class YouTubeDownloader:
     async def _try_piped(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
         instances = self._settings.PIPED_INSTANCES or []
         random.shuffle(instances)
-        for base_url in instances[:4]:
+        
+        # TRY ALL INSTANCES
+        for base_url in instances:
             try:
-                async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
+                async with httpx.AsyncClient(timeout=25.0, verify=False) as client:
                     resp = await client.get(f"{base_url}/streams/{video_id}")
                     if resp.status_code != 200: continue
                     streams = resp.json().get("audioStreams", [])
@@ -167,8 +169,9 @@ class YouTubeDownloader:
 
     async def _try_direct_rotated(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
         url = f"https://www.youtube.com/watch?v={video_id}"
-        candidates = self.proxies[:5] if self.proxies else [None]
-        if None not in candidates and not self.proxies: candidates.append(None)
+        # Пробуем 7 прокси + прямой
+        candidates = self.proxies[:7] if self.proxies else []
+        candidates.append(None) 
         
         loop = asyncio.get_running_loop()
         for proxy in candidates:
