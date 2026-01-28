@@ -10,7 +10,6 @@ from pydantic import field_validator, ValidationInfo
 
 logger = logging.getLogger(__name__)
 
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
@@ -20,6 +19,7 @@ class Settings(BaseSettings):
     WEBHOOK_URL: str = ""
     BASE_URL: str = ""
     ADMIN_IDS: str = ""
+    
     COOKIES_CONTENT: str = ""
     PO_TOKEN: Optional[str] = None
     VISITOR_DATA: Optional[str] = None
@@ -47,23 +47,24 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_DOWNLOADS: int = 3
     DOWNLOAD_TIMEOUT: int = 120
 
-    @field_validator("COBALT_INSTANCES", mode="before")
+    @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", "INVIDIOUS_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
-        # WORKING COBALT INSTANCES (2025)
-        defaults = [
-            "https://cobalt.api.timelessnesses.me",  # Very stable
-            "https://cobalt.ducks.party",            # Stable
-            "https://cobalt.kulko.eu",               # EU
-            "https://cobalt.gomhy.com",              # Backup
-            "https://api.cobalt.tools",              # Official (Strict)
-            "https://cobalt.154.53.53.153.sslip.io"  # Direct IP
-        ]
-        if v is None: return defaults
+        defaults = {
+            "COBALT_INSTANCES": ["https://api.cobalt.tools", "https://cobalt.ducks.party"],
+            "PIPED_INSTANCES": ["https://pipedapi.kavin.rocks", "https://pipedapi.moomoo.me"],
+            "INVIDIOUS_INSTANCES": ["https://inv.nadeko.net", "https://invidious.nerdvpn.de"]
+        }
+        field_name = info.field_name
+        default_list = defaults.get(field_name, [])
+        if v is None: return default_list
         if isinstance(v, str):
+            v = v.strip()
+            if not v: return default_list
             try: return json.loads(v)
             except: return [i.strip() for i in v.split(",") if i.strip()]
-        return v if isinstance(v, list) else defaults
+        if isinstance(v, list): return v
+        return default_list
 
     @field_validator("ADMIN_ID_LIST", mode="before")
     @classmethod
@@ -72,6 +73,6 @@ class Settings(BaseSettings):
         try: return [int(i.strip()) for i in str(v).split(",") if i.strip()]
         except: return []
 
- @lru_cache()
+@lru_cache()
 def get_settings() -> Settings:
     return Settings()
