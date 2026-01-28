@@ -13,28 +13,20 @@ logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", 
-        env_file_encoding="utf-8", 
-        extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
     
-    # === CORE ===
     BOT_TOKEN: str 
     WEBHOOK_URL: str = ""
     BASE_URL: str = ""
     ADMIN_IDS: str = ""
-    
-    # === AUTH ===
     COOKIES_CONTENT: str = ""
     PO_TOKEN: Optional[str] = None
     VISITOR_DATA: Optional[str] = None
     PROXY_URL: Optional[str] = None
-    
-    # === SPOTIFY ===
     SPOTIFY_CLIENT_ID: Optional[str] = None
     SPOTIFY_CLIENT_SECRET: Optional[str] = None
     
-    # === API POOLS ===
     COBALT_INSTANCES: Union[List[str], str, None] = None
     PIPED_INSTANCES: Union[List[str], str, None] = None
     INVIDIOUS_INSTANCES: Union[List[str], str, None] = None
@@ -55,40 +47,31 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_DOWNLOADS: int = 3
     DOWNLOAD_TIMEOUT: int = 120
 
-    @field_validator("COBALT_INSTANCES", "PIPED_INSTANCES", "INVIDIOUS_INSTANCES", mode="before")
+    @field_validator("COBALT_INSTANCES", mode="before")
     @classmethod
     def _parse_instances(cls, v: Any, info: ValidationInfo) -> List[str]:
-        # HARDCODED FALLBACKS (Just in case ENV is empty)
-        defaults = {
-            "COBALT_INSTANCES": ["https://api.cobalt.tools", "https://cobalt-api.ayo.tf"],
-            "PIPED_INSTANCES": ["https://pipedapi.kavin.rocks", "https://pipedapi.moomoo.me"],
-            "INVIDIOUS_INSTANCES": ["https://inv.nadeko.net", "https://invidious.nerdvpn.de", "https://inv.tux.pizza"]
-        }
-        
-        field_name = info.field_name
-        default_list = defaults.get(field_name, [])
-
-        if v is None: return default_list
+        # WORKING COBALT INSTANCES (2025)
+        defaults = [
+            "https://cobalt.api.timelessnesses.me",  # Very stable
+            "https://cobalt.ducks.party",            # Stable
+            "https://cobalt.kulko.eu",               # EU
+            "https://cobalt.gomhy.com",              # Backup
+            "https://api.cobalt.tools",              # Official (Strict)
+            "https://cobalt.154.53.53.153.sslip.io"  # Direct IP
+        ]
+        if v is None: return defaults
         if isinstance(v, str):
-            v = v.strip()
-            if not v: return default_list
-            try:
-                parsed = json.loads(v)
-                if isinstance(parsed, list): return parsed
-            except json.JSONDecodeError: pass
-            return [i.strip() for i in v.split(",") if i.strip()]
-        if isinstance(v, list): return v if v else default_list
-        return default_list
+            try: return json.loads(v)
+            except: return [i.strip() for i in v.split(",") if i.strip()]
+        return v if isinstance(v, list) else defaults
 
     @field_validator("ADMIN_ID_LIST", mode="before")
     @classmethod
     def _assemble_admin_ids(cls, v: Any, info: ValidationInfo) -> List[int]:
-        admin_ids_str = info.data.get("ADMIN_IDS", "")
-        if not admin_ids_str: return []
-        try: return [int(i.strip()) for i in str(admin_ids_str).split(",") if i.strip()]
-        except ValueError: return []
+        if not v: return []
+        try: return [int(i.strip()) for i in str(v).split(",") if i.strip()]
+        except: return []
 
-
-@lru_cache()
+ @lru_cache()
 def get_settings() -> Settings:
     return Settings()
