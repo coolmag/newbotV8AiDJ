@@ -24,7 +24,6 @@ class YouTubeDownloader:
 
     # 👇 ИСПРАВЛЕНИЕ: Добавил **kwargs, чтобы не падало при вызове из radio.py
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
-        # Если передан параметр 'decade' (десятилетие), добавляем его в запрос
         if kwargs.get('decade'):
             query = f"{query} {kwargs['decade']}"
             
@@ -40,13 +39,17 @@ class YouTubeDownloader:
         loop = asyncio.get_running_loop()
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                # Используем query с добавленным десятилетием
                 info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch{limit}:{query}", download=False))
             
             results = []
             if info:
                 entries = info.get('entries', [])
                 for entry in entries:
+                    # 👇 ФИЛЬТР: Пропускаем видео длиннее 12 минут (720 секунд)
+                    duration = entry.get('duration')
+                    if duration and duration > 720:
+                        continue 
+                        
                     if entry and entry.get('id'):
                         results.append(TrackInfo.from_yt_info(entry))
             return results
