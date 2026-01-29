@@ -7,6 +7,7 @@ aiosqlite
 pydantic
 pydantic-settings
 httpx>=0.24.0
+ytmusicapi>=1.0.0
 psutil
 nest-asyncio
 beautifulsoup4
