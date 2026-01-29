@@ -13,15 +13,16 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🛡️ Titanium Downloader v24 (Stable Direct Edition).
-    No Proxies. Just Cookies + Sleep + Stealth.
+    🛡️ Titanium Downloader v25 (iOS Stealth Mode).
+    Removed cookies (causing IP mismatch error).
+    Switched to pure iOS client impersonation.
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
-        # Ограничиваем до 1 потока, чтобы не злить YouTube
+        # 1 поток, чтобы не было "гонки"
         self.semaphore = asyncio.Semaphore(1) 
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
@@ -34,7 +35,8 @@ class YouTubeDownloader:
             'skip_download': True,
             'ignoreerrors': True,
             'noplaylist': True,
-            'extractor_args': {'youtube': {'player_client': ['android', 'web']}}
+            # Маскируемся ТОЛЬКО под Android для поиска (быстрее)
+            'extractor_args': {'youtube': {'player_client': ['android']}}
         }
         
         loop = asyncio.get_running_loop()
@@ -46,8 +48,7 @@ class YouTubeDownloader:
             if info:
                 entries = info.get('entries', [])
                 for entry in entries:
-                    # Фильтр: пропускаем видео длиннее 12 минут (экономия памяти и защита от бана)
-                    if entry.get('duration') and entry.get('duration') > 720:
+                    if entry.get('duration') and entry.get('duration') > 600:
                         continue
                     if entry and entry.get('id'):
                         results.append(TrackInfo.from_yt_info(entry))
@@ -58,19 +59,17 @@ class YouTubeDownloader:
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
-        # Проверка кэша на диске
         if final_path.exists() and final_path.stat().st_size > 5000:
             logger.info(f"✅ Cache hit for {video_id}")
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         async with self.semaphore:
-            # ПАУЗА: Ждем 15-25 секунд. Это критически важно!
-            # Если убрать паузу, Railway IP улетит в бан за 2 минуты.
-            wait_time = random.randint(15, 25)
-            logger.info(f"💤 Sleeping {wait_time}s to avoid ban...")
+            # Пауза все еще нужна
+            wait_time = random.randint(10, 20)
+            logger.info(f"💤 Sleeping {wait_time}s to emulate iOS user...")
             await asyncio.sleep(wait_time)
             
-            logger.info(f"🛡️ Starting direct download for {video_id}...")
+            logger.info(f"📱 Starting iOS download for {video_id}...")
             return await self._download_direct(video_id, track_info)
 
     async def _download_direct(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
@@ -83,16 +82,16 @@ class YouTubeDownloader:
             'no_warnings': True,
             'nocheckcertificate': True,
             
-            # 👇 САМОЕ ВАЖНОЕ: Файл cookies.txt должен лежать рядом с main.py
-            'cookiefile': 'cookies.txt', 
+            # ❌ УБРАЛИ cookiefile, так как он вызывает ошибку "Reload" из-за IP
+            # 'cookiefile': 'cookies.txt', 
             
-            # Ограничиваем скорость скачивания (3 МБ/с), чтобы не выглядеть как бот
-            'ratelimit': 3000000,
+            'ratelimit': 5000000, 
             
+            # 👇 МАГИЯ ЗДЕСЬ: Используем только iOS клиент.
+            # У него нет веб-интерфейса, поэтому он не просит "обновить страницу".
             'extractor_args': {
                 'youtube': {
-                    # Маскируемся под разные клиенты
-                    'player_client': ['android', 'ios', 'web'],
+                    'player_client': ['ios'],
                     'player_skip': ['webpage', 'configs', 'js'],
                 }
             },
