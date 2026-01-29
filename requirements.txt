@@ -12,3 +12,4 @@ nest-asyncio
 beautifulsoup4
 spotipy
 ffmpeg-python
+brotli
