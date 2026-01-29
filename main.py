@@ -24,7 +24,6 @@ from spotify import SpotifyService # <--- IMPORT ADDED
 from handlers import setup_handlers
 from cache_service import CacheService
 from chat_service import ChatManager 
-from proxy_manager import ProxyManager
 
 from gemini_init import HAS_GENAI 
 
@@ -57,10 +56,8 @@ async def lifespan(app: FastAPI):
     
     cache = CacheService(settings.CACHE_DB_PATH)
     await cache.initialize()
-
-    proxy_manager = ProxyManager(settings.BASE_DIR)
     
-    downloader = YouTubeDownloader(settings, cache, proxy_manager)
+    downloader = YouTubeDownloader(settings, cache)
     app.state.downloader = downloader
     
     # Инициализация Spotify (FIXED)
