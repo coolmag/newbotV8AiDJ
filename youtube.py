@@ -13,17 +13,14 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🛡️ Titanium Downloader v25 (iOS Stealth Mode).
-    Removed cookies (causing IP mismatch error).
-    Switched to pure iOS client impersonation.
+    🛡️ Titanium Downloader v27 (OAuth2 Edition).
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
-        # 1 поток, чтобы не было "гонки"
-        self.semaphore = asyncio.Semaphore(1) 
+        self.semaphore = asyncio.Semaphore(1)
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
         if kwargs.get('decade'):
@@ -35,7 +32,6 @@ class YouTubeDownloader:
             'skip_download': True,
             'ignoreerrors': True,
             'noplaylist': True,
-            # Маскируемся ТОЛЬКО под Android для поиска (быстрее)
             'extractor_args': {'youtube': {'player_client': ['android']}}
         }
         
@@ -48,7 +44,7 @@ class YouTubeDownloader:
             if info:
                 entries = info.get('entries', [])
                 for entry in entries:
-                    if entry.get('duration') and entry.get('duration') > 600:
+                    if entry.get('duration') and entry.get('duration') > 720:
                         continue
                     if entry and entry.get('id'):
                         results.append(TrackInfo.from_yt_info(entry))
@@ -64,37 +60,34 @@ class YouTubeDownloader:
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         async with self.semaphore:
-            # Пауза все еще нужна
-            wait_time = random.randint(10, 20)
-            logger.info(f"💤 Sleeping {wait_time}s to emulate iOS user...")
-            await asyncio.sleep(wait_time)
-            
-            logger.info(f"📱 Starting iOS download for {video_id}...")
-            return await self._download_direct(video_id, track_info)
+            # Небольшая пауза для приличия
+            await asyncio.sleep(random.randint(5, 10))
+            logger.info(f"🔑 Starting OAuth2 download for {video_id}...")
+            return await self._download_with_oauth(video_id, track_info)
 
-    async def _download_direct(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
+    async def _download_with_oauth(self, video_id: str, track_info: TrackInfo) -> DownloadResult:
         temp_path = self._settings.DOWNLOADS_DIR / f"{video_id}_temp"
         
+        # Путь к кэшу, где будет храниться токен авторизации
+        # Важно, чтобы этот файл сохранялся между перезапусками (в идеале)
+        cache_dir = Path("/app/auth_cache")
+        cache_dir.mkdir(exist_ok=True)
+
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': str(temp_path),
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
             
-            # ❌ УБРАЛИ cookiefile, так как он вызывает ошибку "Reload" из-за IP
-            # 'cookiefile': 'cookies.txt', 
+            # 👇 ВКЛЮЧАЕМ OAUTH2
+            'username': 'oauth2',
+            'password': '',
+            'cache_dir': str(cache_dir), # Сохраняем токен сюда
             
-            'ratelimit': 5000000, 
+            # 👇 ВАЖНО: Включаем вывод в консоль, чтобы увидеть КОД
+            'quiet': False, 
+            'no_warnings': False,
             
-            # 👇 МАГИЯ ЗДЕСЬ: Используем только iOS клиент.
-            # У него нет веб-интерфейса, поэтому он не просит "обновить страницу".
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['ios'],
-                    'player_skip': ['webpage', 'configs', 'js'],
-                }
-            },
+            'ratelimit': 5000000,
+            
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -103,6 +96,8 @@ class YouTubeDownloader:
         }
 
         try:
+            # Мы используем кастомный логгер, чтобы перехватить сообщение с кодом
+            # Но yt-dlp пишет OAuth инструкции прямо в stderr/stdout
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: self._run_yt_dlp(ydl_opts, video_id))
             
