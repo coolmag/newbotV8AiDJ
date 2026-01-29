@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import List, Optional
 
 import httpx
-import yt_dlp
 from config import Settings
 from models import DownloadResult, TrackInfo
 from cache_service import CacheService
@@ -14,179 +13,140 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🛡️ Titanium Downloader v31 (Invidious API + SoundCloud).
-    Uses direct API calls to Invidious instances (bypass Google).
-    Fallbacks to SoundCloud if Invidious fails.
+    🛡️ Titanium Downloader v32 (Pure Piped API).
+    Bypasses YouTube IP blocks by using Piped instances as proxies.
+    No yt-dlp dependencies for network operations.
     """
     
-    # Список живых инстансов Invidious (2026)
-    # Мы будем перебирать их по очереди
-    INVIDIOUS_INSTANCES = [
-        "https://inv.nadeko.net",
-        "https://invidious.nerdvpn.de",
-        "https://inv.tux.pizza",
-        "https://invidious.drgns.space",
-        "https://iv.melmac.space",
-        "https://yewtu.be",             # Часто блочат, но попробуем
-        "https://vid.puffyan.us",
+    # Список инстансов Piped. 
+    # Важно: Мы используем те, что поддерживают "proxying" (проксирование трафика).
+    PIPED_INSTANCES = [
+        "https://piped-api.lunar.icu",       # Твой вариант
+        "https://pipedapi.adminforge.de",    # Немецкий, надежный
+        "https://api-piped.mha.fi",          # Финский
+        "https://piped-api.codespace.cz",    # Чешский
+        "https://api.piped.privacy.com.de",  # Еще один немецкий
+        "https://pipedapi.drgns.space",
+        "https://pipedapi.kavin.rocks",      # Старый, может быть заблочен, но пусть будет
     ]
 
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
+        # Piped быстрый, можно 3 потока
         self.semaphore = asyncio.Semaphore(3)
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
-        """
-        1. Ищем на Invidious (это YouTube контент).
-        2. Если не вышло - ищем на SoundCloud.
-        """
+        """Поиск через Piped API (без yt-dlp)"""
         if kwargs.get('decade'):
             query = f"{query} {kwargs['decade']}"
 
-        # --- Попытка 1: Invidious API ---
-        inv_results = await self._search_invidious(query, limit)
-        if inv_results:
-            return inv_results
-            
-        # --- Попытка 2: SoundCloud (Резерв) ---
-        logger.info("Invidious failed, switching to SoundCloud search...")
-        return await self._search_soundcloud(query, limit)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Перемешиваем, чтобы распределить нагрузку
+            instances = self.PIPED_INSTANCES.copy()
+            random.shuffle(instances)
 
-    async def _search_invidious(self, query: str, limit: int) -> List[TrackInfo]:
-        async with httpx.AsyncClient(timeout=6.0) as client:
-            random.shuffle(self.INVIDIOUS_INSTANCES)
-            for instance in self.INVIDIOUS_INSTANCES:
+            for instance in instances:
                 try:
-                    resp = await client.get(f"{instance}/api/v1/search", params={"q": query, "type": "video"})
+                    # Запрос к API поиска Piped
+                    resp = await client.get(f"{instance}/search", params={"q": query, "filter": "music_songs"})
                     if resp.status_code != 200: continue
                     
                     data = resp.json()
+                    items = data.get('items', [])
                     results = []
-                    for item in data[:limit]:
-                        # Фильтр длины (15 мин)
-                        if item.get('lengthSeconds', 0) > 900: continue
+                    
+                    for item in items[:limit]:
+                        # Piped возвращает URL как "/watch?v=ID"
+                        vid_url = item.get('url', '')
+                        vid_id = vid_url.split('v=')[-1] if 'v=' in vid_url else ''
                         
-                        results.append(TrackInfo(
-                            identifier=item.get('videoId'),
+                        if not vid_id: continue
+                        if item.get('duration', 0) > 900: continue # Фильтр 15 мин
+
+                        track = TrackInfo(
+                            identifier=vid_id,
                             title=item.get('title'),
-                            uploader=item.get('author'),
-                            duration=item.get('lengthSeconds'),
-                            thumbnail_url=item.get('videoThumbnails', [{}])[0].get('url'),
-                            source="invidious" # Пометка источника
-                        ))
+                            uploader=item.get('uploaderName'),
+                            duration=item.get('duration', 0),
+                            thumbnail_url=item.get('thumbnail'),
+                            source="piped"
+                        )
+                        results.append(track)
+                    
                     if results:
-                        return results
-                except Exception:
+                        return results # Если нашли на одном инстансе, возвращаем
+                        
+                except Exception as e:
+                    logger.warning(f"Search failed on {instance}: {e}")
                     continue
+        
         return []
 
-    async def _search_soundcloud(self, query: str, limit: int) -> List[TrackInfo]:
-        # Старый добрый поиск через yt-dlp для SoundCloud
-        try:
-            loop = asyncio.get_running_loop()
-            opts = {'quiet': True, 'extract_flat': True, 'skip_download': True, 'ignoreerrors': True}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch{limit}:{query}", download=False))
-                
-            results = []
-            if info:
-                for entry in info.get('entries', []):
-                    if entry:
-                        results.append(TrackInfo(
-                            identifier=entry.get('url'),
-                            title=entry.get('title'),
-                            uploader=entry.get('uploader'),
-                            duration=int(entry.get('duration', 0)),
-                            source="soundcloud"
-                        ))
-            return results
-        except Exception:
-            return []
-
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
-        final_path = self._settings.DOWNLOADS_DIR / f"{video_id[-10:]}.mp3" # Короткое имя
+        final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         
+        # Проверка кэша
         if final_path.exists() and final_path.stat().st_size > 10000:
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         async with self.semaphore:
-            if track_info and track_info.source == "soundcloud":
-                return await self._download_soundcloud(video_id, final_path, track_info)
-            else:
-                # Если источник не указан или invidious -> пробуем API
-                return await self._download_invidious(video_id, final_path, track_info)
+            return await self._download_piped(video_id, final_path, track_info)
 
-    async def _download_invidious(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
-        logger.info(f"👽 Trying Invidious API for {video_id}...")
+    async def _download_piped(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
+        """Скачивание аудиопотока через Piped"""
         
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            random.shuffle(self.INVIDIOUS_INSTANCES)
-            
-            for instance in self.INVIDIOUS_INSTANCES:
+        instances = self.PIPED_INSTANCES.copy()
+        random.shuffle(instances)
+        
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            for instance in instances:
                 try:
-                    # 1. Получаем инфо о видео
-                    resp = await client.get(f"{instance}/api/v1/videos/{video_id}")
-                    if resp.status_code != 200: continue
+                    logger.info(f"🧪 Trying Piped Instance: {instance} for {video_id}")
                     
+                    # 1. Получаем информацию о потоках
+                    resp = await client.get(f"{instance}/streams/{video_id}")
+                    if resp.status_code != 200: 
+                        logger.warning(f"Instance {instance} returned {resp.status_code}")
+                        continue
+                        
                     data = resp.json()
+                    audio_streams = data.get('audioStreams', [])
                     
-                    # 2. Ищем аудио поток (как в твоем примере)
-                    audio_url = None
-                    adaptive = data.get('adaptiveFormats', [])
-                    # Сортируем по битрейту (лучшее качество)
-                    adaptive.sort(key=lambda x: int(x.get('bitrate', 0)), reverse=True)
+                    if not audio_streams:
+                        logger.warning(f"No audio streams on {instance}")
+                        continue
+                        
+                    # 2. Выбираем лучший поток (m4a обычно стабильнее)
+                    # Сортируем по битрейту
+                    best_stream = sorted(audio_streams, key=lambda x: x.get('bitrate', 0), reverse=True)[0]
+                    stream_url = best_stream.get('url')
                     
-                    for fmt in adaptive:
-                        if "audio" in fmt.get('type', ''):
-                            audio_url = fmt.get('url')
-                            break
-                    
-                    if not audio_url: continue
+                    if not stream_url: continue
 
-                    # 3. Скачиваем поток
-                    logger.info(f"Stream found on {instance}, downloading...")
-                    async with client.stream("GET", audio_url) as response:
-                        if response.status_code == 200:
-                            with open(target_path, "wb") as f:
-                                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    # 3. Скачиваем сам файл
+                    logger.info(f"⬇️ Downloading stream from {instance}...")
+                    
+                    temp_path = str(target_path).replace(".mp3", "_temp")
+                    
+                    async with client.stream("GET", stream_url) as stream_resp:
+                        if stream_resp.status_code == 200:
+                            with open(temp_path, "wb") as f:
+                                async for chunk in stream_resp.aiter_bytes(chunk_size=8192):
                                     f.write(chunk)
-                            
-                            if target_path.stat().st_size > 10000:
-                                logger.info(f"✅ Success via Invidious: {instance}")
-                                return DownloadResult(success=True, file_path=target_path, track_info=track_info)
-                
+                                    
+                    # 4. Проверка и переименование
+                    temp_file = Path(temp_path)
+                    if temp_file.exists() and temp_file.stat().st_size > 10000:
+                        if temp_file != target_path:
+                            temp_file.rename(target_path)
+                        
+                        logger.info(f"✅ Success via Piped: {instance}")
+                        return DownloadResult(success=True, file_path=target_path, track_info=track_info)
+                    
                 except Exception as e:
-                    logger.warning(f"Instance {instance} failed: {e}")
+                    logger.warning(f"❌ Error on {instance}: {e}")
                     continue
 
-        return DownloadResult(success=False, error_message="All Invidious instances failed.")
-
-    async def _download_soundcloud(self, url: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
-        # Для SoundCloud используем yt-dlp, он там работает отлично
-        try:
-            loop = asyncio.get_running_loop()
-            temp_path = str(target_path).replace(".mp3", "")
-            opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': temp_path, # yt-dlp сам добавит .mp3
-                'quiet': True,
-                'no_warnings': True,
-                'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
-            }
-            await loop.run_in_executor(None, lambda: self._run_yt_dlp(opts, url))
-            
-            # Проверяем, какой файл создался (иногда добавляется расширение)
-            created_path = Path(temp_path + ".mp3")
-            if created_path.exists():
-                if created_path != target_path:
-                    created_path.rename(target_path)
-                return DownloadResult(success=True, file_path=target_path, track_info=track_info)
-        except Exception:
-            pass
-        return DownloadResult(success=False)
-
-    def _run_yt_dlp(self, opts, url):
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+        return DownloadResult(success=False, error_message="All Piped instances failed.")
