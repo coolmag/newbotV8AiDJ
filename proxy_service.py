@@ -2,7 +2,7 @@ import asyncio
 import logging
 import random
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import httpx # Import httpx for testing proxy connection
 from v2ray2proxy import V2RayProxy
@@ -43,20 +43,29 @@ class ProxyManager:
                 
                 # Wait for socks_proxy_url to become available
                 start_time = asyncio.get_event_loop().time()
+                test_passed = False
+                error_message = "Timed out waiting for proxy to become ready."
+
                 while asyncio.get_event_loop().time() - start_time < timeout:
                     if getattr(temp_proxy, 'socks_proxy_url', None):
                         # Test the proxy connection
-                        if await self._test_proxy_connection(temp_proxy.socks_proxy_url):
+                        success, test_error_msg = await self._test_proxy_connection(temp_proxy.socks_proxy_url)
+                        if success:
                             self._active_proxy = temp_proxy
                             self._active_proxy_url = self._active_proxy.socks_proxy_url
                             logger.info(f"Successfully started and tested proxy on {self._active_proxy_url}")
-                            return True
+                            test_passed = True
+                            break
                         else:
-                            logger.warning(f"Proxy {proxy_link[:50]}... started but failed connection test.")
+                            error_message = f"Failed connection test: {test_error_msg}"
+                            logger.warning(f"Proxy {proxy_link[:50]}... started but {error_message}")
                             break # Break from inner loop to try next proxy
                     await asyncio.sleep(1) # Check every second
                 
-                logger.warning(f"Proxy {proxy_link[:50]}... did not become ready within {timeout} seconds.")
+                if test_passed:
+                    return True
+                else:
+                    logger.warning(f"Proxy {proxy_link[:50]}... did not become ready within {timeout} seconds. {error_message}")
 
             except Exception as e:
                 logger.error(f"Failed to start proxy {proxy_link[:50]}...: {e}")
@@ -68,23 +77,22 @@ class ProxyManager:
         logger.error("Failed to start any V2Ray proxy from the list.")
         return False
 
-    async def _test_proxy_connection(self, proxy_url: str) -> bool:
-        """Tests the proxy connection by making a request to a known reliable service."""
+    async def _test_proxy_connection(self, proxy_url: str) -> Tuple[bool, Optional[str]]:
+        """Tests the proxy connection by making a request to a known reliable service.
+        Returns (True, None) on success, or (False, error_message) on failure."""
         try:
             async with httpx.AsyncClient(proxies={"http://": proxy_url, "https://": proxy_url}, timeout=20) as client:
                 response = await client.get("https://www.google.com", follow_redirects=True)
                 response.raise_for_status() # Raise an exception for bad status codes
                 logger.debug(f"Proxy test to google.com successful via {proxy_url}")
-                return True
+                return True, None
         except httpx.RequestError as e:
             error_details = f"{e.__class__.__name__}: {e}"
             if e.__cause__:
                 error_details += f" (Cause: {e.__cause__.__class__.__name__}: {e.__cause__})"
-            logger.warning(f"Proxy connection test failed for {proxy_url}: {error_details}")
-            return False
+            return False, error_details
         except Exception as e:
-            logger.error(f"Unexpected error during proxy test for {proxy_url}: {e}")
-            return False
+            return False, f"Unexpected error during proxy test: {e}"
 
     def stop_proxy(self):
         if self._active_proxy:
