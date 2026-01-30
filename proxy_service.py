@@ -4,7 +4,7 @@ import random
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import httpx # Import httpx for testing proxy connection
+import httpx
 from v2ray2proxy import V2RayProxy
 
 logger = logging.getLogger(__name__)
@@ -25,78 +25,100 @@ class ProxyManager:
         with open(self._proxy_list_path, 'r', encoding='utf-8') as f:
             # Filter out Vless Reality proxies for now due to configuration issues
             self._proxies = [line.strip() for line in f if line.strip() and "security=reality" not in line.lower()]
+        
         logger.info(f"Loaded {len(self._proxies)} compatible proxies from {self._proxy_list_path}")
-    
-    async def start_proxy(self, timeout: int = 15) -> bool:
+
+    async def start_proxy(self, timeout: int = 30) -> bool:
+        """
+        Starts a V2Ray proxy. 
+        Timeout increased to 30s to allow slow connections to stabilize.
+        """
         if self._active_proxy:
-            logger.info("Proxy already running.")
+            logger.info(f"Proxy already running on {self._active_proxy_url}")
             return True
 
-        random.shuffle(self._proxies) # Randomize order to try different proxies
+        random.shuffle(self._proxies)
         
         for proxy_link in self._proxies:
             temp_proxy: Optional[V2RayProxy] = None
             try:
-                logger.info(f"Attempting to start proxy: {proxy_link[:50]}...")
-                
+                logger.info(f"🚀 Attempting to start proxy: {proxy_link[:40]}...")
                 temp_proxy = V2RayProxy(proxy_link)
                 
-                # Wait for socks_proxy_url to become available
+                # Wait loop
                 start_time = asyncio.get_event_loop().time()
                 test_passed = False
-                error_message = "Timed out waiting for proxy to become ready."
+                last_error = ""
 
                 while asyncio.get_event_loop().time() - start_time < timeout:
                     if getattr(temp_proxy, 'socks_proxy_url', None):
-                        # Test the proxy connection
-                        success, test_error_msg = await self._test_proxy_connection(temp_proxy.socks_proxy_url)
+                        proxy_url = temp_proxy.socks_proxy_url
+                        
+                        # Делаем паузу перед тестом, чтобы V2Ray успел поднять туннель
+                        await asyncio.sleep(2) 
+                        
+                        logger.debug(f"Testing connectivity via {proxy_url}...")
+                        success, error_msg = await self._test_proxy_connection(proxy_url)
+                        
                         if success:
                             self._active_proxy = temp_proxy
-                            self._active_proxy_url = self._active_proxy.socks_proxy_url
-                            logger.info(f"Successfully started and tested proxy on {self._active_proxy_url}")
+                            self._active_proxy_url = proxy_url
+                            logger.info(f"✅ Proxy UP and running: {self._active_proxy_url}")
                             test_passed = True
                             break
                         else:
-                            error_message = f"Failed connection test: {test_error_msg}"
-                            logger.warning(f"Proxy {proxy_link[:50]}... started but {error_message}")
-                            break # Break from inner loop to try next proxy
-                    await asyncio.sleep(1) # Check every second
-                
+                            last_error = error_msg
+                            logger.warning(f"⚠️ Proxy started but failed test: {error_msg}. Retrying...")
+                    
+                    await asyncio.sleep(2)
+
                 if test_passed:
                     return True
-                else:
-                    logger.warning(f"Proxy {proxy_link[:50]}... did not become ready within {timeout} seconds. {error_message}")
+                
+                # Если тайм-аут вышел
+                logger.error(f"❌ Proxy {proxy_link[:30]} timed out ({timeout}s). Last error: {last_error}")
+                if temp_proxy: temp_proxy.stop()
 
             except Exception as e:
-                logger.error(f"Failed to start proxy {proxy_link[:50]}...: {e}")
-            finally:
-                if temp_proxy and temp_proxy != self._active_proxy: # Only stop if it's not the active one
-                    logger.debug(f"Stopping failed/untested proxy {proxy_link[:50]}...")
-                    temp_proxy.stop()
-                
-        logger.error("Failed to start any V2Ray proxy from the list.")
+                logger.error(f"🔥 Critical error starting proxy: {e}")
+                if temp_proxy: temp_proxy.stop()
+        
+        logger.error("🚫 All proxies failed to start or connect.")
         return False
 
     async def _test_proxy_connection(self, proxy_url: str) -> Tuple[bool, Optional[str]]:
-        """Tests the proxy connection by making a request to a known reliable service.
-        Returns (True, None) on success, or (False, error_message) on failure."""
+        """
+        Tests connection using Cloudflare's connectivity check (lighter than Google).
+        """
         try:
-            async with httpx.AsyncClient(proxies={"http://": proxy_url, "https://": proxy_url}, timeout=20) as client:
-                response = await client.get("https://www.google.com", follow_redirects=True)
-                response.raise_for_status() # Raise an exception for bad status codes
-                logger.debug(f"Proxy test to google.com successful via {proxy_url}")
-                return True, None
-        except httpx.RequestError as e:
-            error_details = f"{e.__class__.__name__}: {e}"
-            if e.__cause__:
-                error_details += f" (Cause: {e.__cause__.__class__.__name__}: {e.__cause__})"
-            return False, error_details
+            # Используем http://cp.cloudflare.com/generate_204 - это очень легкий чек
+            target_url = "http://cp.cloudflare.com/generate_204"
+            
+            async with httpx.AsyncClient(
+                proxies={"http://": proxy_url, "https://": proxy_url}, 
+                timeout=10.0,
+                verify=False # Игнорируем ошибки SSL (важно для V2Ray)
+            ) as client:
+                
+                response = await client.get(target_url)
+                
+                if response.status_code == 204 or response.status_code == 200:
+                    return True, None
+                else:
+                    return False, f"Status code: {response.status_code}"
+
+        except httpx.ConnectTimeout:
+            return False, "ConnectTimeout"
+        except httpx.ReadTimeout:
+            return False, "ReadTimeout"
+        except httpx.ProxyError as e:
+            return False, f"ProxyError: {e}"
         except Exception as e:
-            return False, f"Unexpected error during proxy test: {e}"
+            return False, f"Error: {str(e)[:50]}"
 
     def stop_proxy(self):
         if self._active_proxy:
-            logger.info(f"Stopping active proxy on {self._active_proxy_url}")
+            logger.info(f"🛑 Stopping active proxy on {self._active_proxy_url}")
             self._active_proxy.stop()
             self._active_proxy = None
             self._active_proxy_url = None
@@ -106,4 +128,3 @@ class ProxyManager:
     @property
     def active_proxy_url(self) -> Optional[str]:
         return self._active_proxy_url
-
