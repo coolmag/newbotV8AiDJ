@@ -14,21 +14,21 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    📺 TV/iOS Stealth Edition (v36).
-    Search: ytmusicapi (Works perfectly).
-    Download: yt-dlp with 'tv_embedded' & 'ios' clients to bypass 403 blocks.
+    🎵 YouTube Music Edition (v37 Final Fix).
+    Fixes:
+    1. Reverted 'author' -> 'uploader' to match models.py.
+    2. Uses 'tv_embedded' client for downloads (anti-ban).
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
-        # Снижаем нагрузку до 1 потока, чтобы пролезть через фильтры
         self.semaphore = asyncio.Semaphore(1)
         self.ytmusic = YTMusic() 
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
-        """Поиск через YouTube Music API (Работает стабильно)"""
+        """Поиск через YouTube Music API"""
         if kwargs.get('decade'):
             query = f"{query} {kwargs['decade']}"
             
@@ -55,15 +55,16 @@ class YouTubeDownloader:
                         duration = int(parts[0]) * 60 + int(parts[1])
                     else:
                         duration = int(parts[0])
-                except ValueError: # Catch possible error if parts[0] is not an int
+                except ValueError: # Added ValueError for robustness
                     duration = 0
                 
                 if duration > 900: continue
 
+                # 👇 ИСПРАВЛЕНО: Вернули uploader
                 track = TrackInfo(
                     identifier=video_id,
                     title=item.get('title'),
-                    author=artists, 
+                    uploader=artists,  # <--- ВЕРНУЛИ КАК БЫЛО
                     duration=duration,
                     thumbnail_url=item.get('thumbnails', [{}])[-1].get('url'),
                     source="ytmusic"
@@ -85,7 +86,6 @@ class YouTubeDownloader:
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         async with self.semaphore:
-            # Увеличиваем паузу, чтобы имитировать просмотр
             wait_time = random.randint(5, 12)
             await asyncio.sleep(wait_time)
             logger.info(f"📺 Downloading {video_id} (TV Mode)...")
@@ -100,16 +100,12 @@ class YouTubeDownloader:
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            
-            # 👇 ГЛАВНОЕ ИЗМЕНЕНИЕ: Используем TV Embedded и iOS
-            # Android и Web сейчас банятся на Railway.
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['tv_embedded', 'ios'],
+                    'player_client': ['tv_embedded', 'ios'], # TV режим от бана
                     'player_skip': ['webpage', 'configs', 'js'],
                 }
             },
-            
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -135,47 +131,11 @@ class YouTubeDownloader:
                     result_path.rename(target_path)
                 return DownloadResult(success=True, file_path=target_path, track_info=track_info)
             else:
-                # Если не скачалось, пробуем фолбэк на обычный web клиент (на удачу)
-                logger.warning(f"[{video_id}] TV client failed or file too small. Retrying with fallback...")
-                return await self._download_fallback(video_id, target_path, track_info)
+                return DownloadResult(success=False, error_message="Download failed")
 
         except Exception as e:
-            logger.error(f"[{video_id}] ❌ Download error (direct TV/iOS): {e}")
-            # If an error occurs, still try fallback
-            logger.warning(f"[{video_id}] Trying fallback after direct download error.")
-            return await self._download_fallback(video_id, target_path, track_info)
-
-
-    async def _download_fallback(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
-        """Запасной вариант: mweb (мобильный веб)"""
-        temp_path = str(target_path).replace(".mp3", "_temp_fb")
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': temp_path,
-            'quiet': True,
-            'nocheckcertificate': True,
-            'extractor_args': {'youtube': {'player_client': ['mweb']}},
-            'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
-        }
-        try:
-            logger.info(f"[{video_id}] Downloading with Fallback (mweb)...")
-            loop = asyncio.get_running_loop()
-            url = f"https://music.youtube.com/watch?v={video_id}"
-            await loop.run_in_executor(None, lambda: self._run_yt_dlp(ydl_opts, url))
-            
-            result_path = Path(temp_path + ".mp3")
-            if result_path.exists() and result_path.stat().st_size > 10000:
-                if result_path != target_path:
-                    if target_path.exists():
-                        target_path.unlink()
-                    result_path.rename(target_path)
-                logger.info(f"[{video_id}] ✅ Success via Fallback: {video_id}")
-                return DownloadResult(success=True, file_path=target_path, track_info=track_info)
-        except Exception as e:
-            logger.error(f"[{video_id}] ❌ Download error (fallback mweb): {e}")
-        
-        logger.error(f"[{video_id}] All download methods failed.")
-        return DownloadResult(success=False, error_message="All download methods failed")
+            logger.error(f"❌ Download error: {e}")
+            return DownloadResult(success=False, error_message=str(e))
 
     def _run_yt_dlp(self, opts, url):
         with yt_dlp.YoutubeDL(opts) as ydl:
