@@ -91,6 +91,41 @@ class AIManager:
             return {"intent": "radio", "query": text_lower.strip() or "top hits"}
         return {"intent": "search", "query": text}
 
+    async def get_chat_response(self, prompt: str, system_prompt: str = "") -> str:
+        """Метод для простой болталки"""
+        full_prompt = f"{system_prompt}\nUser: {prompt}"
+        
+        # 1. OpenRouter
+        if "OpenRouter" in self.providers:
+            # Используем ту же логику, но ожидаем текст, а не JSON
+            try:
+                headers = {"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}", "Content-Type": "application/json", "HTTP-Referer": "https://railway.app"}
+                payload = {
+                    "model": "google/gemini-2.0-flash-exp:free", # Или любая другая free
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt}
+                    ]
+                }
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 200:
+                        return resp.json()['choices'][0]['message']['content']
+            except: pass
+
+        # 2. Gemini
+        if "Gemini" in self.providers:
+            try:
+                # Используем chat session для контекста (по желанию) или просто generate
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=full_prompt
+                )
+                return response.text
+            except: pass
+            
+        return "Извини, я сейчас немного занят музыкой, давай поболтаем позже! 🎧"
+
     def _parse_json(self, text: str) -> Optional[dict]:
         try:
             cleaned = text.strip().replace("```json", "").replace("```", "")
