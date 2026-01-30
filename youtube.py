@@ -14,9 +14,8 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🎵 YouTube Music Edition (v41 - JS Runtime Fix).
-    Strategy: Explicitly tell yt-dlp to use the available 'node' JS runtime.
-    This is an attempt to fix 'Signature solving failed' and related issues.
+    🎵 YouTube Music Edition (v42 - Correct JS Runtime Format).
+    Fixes: Invalid js_runtimes format. Now uses ['node'].
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
@@ -63,6 +62,7 @@ class YouTubeDownloader:
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
+        
         if final_path.exists() and final_path.stat().st_size > 10000:
             logger.info(f"✅ Cache hit for {video_id}")
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
@@ -79,7 +79,7 @@ class YouTubeDownloader:
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            'js_runtimes': 'node', # Explicitly use node
+            'js_runtimes': ['node'], # Correct format: list of runtimes
             'extractor_args': {
                 'youtube': {
                     'player_client': ['WEB_REMIX'],
@@ -114,7 +114,7 @@ class YouTubeDownloader:
             'outtmpl': temp_path,
             'quiet': True,
             'nocheckcertificate': True,
-            'js_runtimes': 'node', # Explicitly use node
+            'js_runtimes': ['node'], # Correct format: list of runtimes
             'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
         }
         try:
