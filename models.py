@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 from pathlib import Path
 
- @dataclass
+@dataclass
 class TrackInfo:
     identifier: str
     title: str
@@ -27,7 +27,7 @@ class TrackInfo:
             thumbnail_url=info.get('thumbnail')
         )
 
- @dataclass
+@dataclass
 class DownloadResult:
     success: bool
     file_path: Optional[Path] = None
