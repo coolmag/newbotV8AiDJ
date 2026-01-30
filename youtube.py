@@ -9,15 +9,16 @@ from ytmusicapi import YTMusic
 from config import Settings
 from models import DownloadResult, TrackInfo
 from cache_service import CacheService
-from proxy_service import ProxyManager  # <--- ИМПОРТИРУЕМ ТВОЙ СЕРВИС
+from proxy_service import ProxyManager
 
 logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🎵 YouTube Music Edition (v43 - V2Ray Powered).
+    🎵 YouTube Music Edition (v44 - V2Ray + Field Fix).
     Search: ytmusicapi (Direct).
     Download: yt-dlp + V2Ray Proxy Rotation.
+    Fixes: 'author' -> 'uploader' mismatch.
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
@@ -28,12 +29,11 @@ class YouTubeDownloader:
         self.ytmusic = YTMusic() 
         
         # Инициализируем твой ProxyManager
-        # Убедись, что путь к файлу прокси правильный в settings или хардкодом
         proxies_file = Path("hiddify_compatible_v2ray_proxies.txt")
         self._proxy_manager = ProxyManager(proxies_file)
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
-        """Поиск через YouTube Music API (работает без прокси обычно)"""
+        """Поиск через YouTube Music API"""
         if kwargs.get('decade'):
             query = f"{query} {kwargs['decade']}"
             
@@ -60,10 +60,11 @@ class YouTubeDownloader:
                 
                 if duration > 900: continue
 
+                # 👇 ИСПРАВЛЕНО: uploader вместо author/artist
                 track = TrackInfo(
                     identifier=video_id,
                     title=item.get('title'),
-                    author=artists, 
+                    uploader=artists, # <--- ВОТ ТУТ БЫЛА ОШИБКА
                     duration=duration,
                     thumbnail_url=item.get('thumbnails', [{}])[-1].get('url'),
                     source="ytmusic"
@@ -87,12 +88,10 @@ class YouTubeDownloader:
         # 🚀 ЗАПУСКАЕМ ПРОКСИ ПЕРЕД СКАЧИВАНИЕМ
         proxy_started = False
         try:
-            # Пытаемся запустить прокси (proxy_service сам выберет рабочий)
             proxy_started = await self._proxy_manager.start_proxy()
             
             if not proxy_started:
-                logger.error("Failed to start V2Ray proxy. Trying direct download as fallback...")
-                # Можно попробовать без прокси, но скорее всего будет 403
+                logger.error("Failed to start V2Ray proxy. Trying direct download...")
             
             async with self.semaphore:
                 await asyncio.sleep(random.randint(2, 5))
@@ -101,14 +100,12 @@ class YouTubeDownloader:
                 return await self._download_smart(video_id, final_path, track_info)
                 
         finally:
-            # Останавливаем прокси после скачивания (чтобы не жрать ресурсы)
             if proxy_started:
                 self._proxy_manager.stop_proxy()
 
     async def _download_smart(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
         temp_path = str(target_path).replace(".mp3", "_temp")
         
-        # Базовые опции
         opts = {
             'format': 'bestaudio/best',
             'outtmpl': temp_path,
@@ -118,21 +115,18 @@ class YouTubeDownloader:
             'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
         }
         
-        # 👇 ПОДКЛЮЧАЕМ ПРОКСИ К YT-DLP
         if self._proxy_manager.active_proxy_url:
             opts['proxy'] = self._proxy_manager.active_proxy_url
             logger.info(f"🔗 Using Proxy for yt-dlp: {self._proxy_manager.active_proxy_url}")
 
-        # Список клиентов для перебора
         clients = [
-            ['android', 'android_music'], # Android обычно самый быстрый
-            ['ios'],                      # iOS хороший запасной
-            ['tv_embedded', 'web_creator']# TV если мобильные забанены
+            ['android', 'android_music'], 
+            ['ios'],                      
+            ['tv_embedded', 'web_creator']
         ]
 
         for client_list in clients:
             try:
-                # Обновляем клиент в опциях
                 opts['extractor_args'] = {
                     'youtube': {
                         'player_client': client_list,
@@ -146,7 +140,6 @@ class YouTubeDownloader:
                 url = f"https://music.youtube.com/watch?v={video_id}"
                 await loop.run_in_executor(None, lambda: self._run_yt_dlp(opts, url))
                 
-                # Проверка результата
                 paths_to_check = [Path(temp_path + ".mp3"), Path(temp_path)]
                 for p in paths_to_check:
                     if p.exists() and p.stat().st_size > 10000:
