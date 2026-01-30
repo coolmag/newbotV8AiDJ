@@ -1,166 +1,149 @@
-# Version: 43 - Aggressive Cache Bust
 import logging
 import asyncio
-from contextlib import asynccontextmanager
-import time
-from datetime import timedelta
-import os
-import json
-import subprocess
-import shutil
-
+from pathlib import Path
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.requests import ClientDisconnect
-from telegram import Update, BotCommand
-from telegram.ext import Application
 
-from config import get_settings, Settings
-from logging_setup import setup_logging
-from radio import RadioManager
+from config import get_settings # Changed import to use get_settings
 from youtube import YouTubeDownloader
-from spotify import SpotifyService # <--- IMPORT ADDED
-from handlers import setup_handlers
 from cache_service import CacheService
-from chat_service import ChatManager 
+from ai_manager import AIManager # Нужен для AI DJ
+from radio import RadioManager
 
-from gemini_init import HAS_GENAI 
+# Логирование
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
 
-logger = logging.getLogger(__name__)
-_start_time = time.time()
+# Settings
+settings = get_settings() # Moved here to be accessible globally
 
-def get_uptime(): return str(timedelta(seconds=int(time.time() - _start_time)))
+app = FastAPI()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    setup_logging()
-    logger.info("⚡ Aurora System Starting...")
-    
-    # --- ДИАГНОСТИКА ---
-    logger.info("🛠 DIAGNOSTIC CHECK:")
-    if shutil.which("node"): logger.info("✅ Node.js DETECTED")
-    else: logger.error("❌ Node.js NOT FOUND")
-    
-    if shutil.which("ffmpeg"): logger.info("✅ FFmpeg DETECTED")
-    else: logger.error("❌ FFmpeg NOT FOUND")
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    if HAS_GENAI: logger.info("🧠 NLP Engine: ACTIVE (Gemini)")
-    else: logger.warning("🧠 NLP Engine: INACTIVE")
+# Services
+cache_service = CacheService(settings.CACHE_DB_PATH) # Initialize with path
+downloader = YouTubeDownloader(settings, cache_service)
+ai_manager = AIManager()
 
-    settings = get_settings()
-    app.state.settings = settings
-    
-    os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
-    os.makedirs(settings.TEMP_AUDIO_DIR, exist_ok=True)
-    
-    cache = CacheService(settings.CACHE_DB_PATH)
-    await cache.initialize()
-    
-    downloader = YouTubeDownloader(settings, cache)
-    app.state.downloader = downloader
-    
-    # Инициализация Spotify (FIXED)
-    spotify_service = SpotifyService(settings, downloader)
-    app.state.spotify_service = spotify_service
-    
-    builder = Application.builder().token(settings.BOT_TOKEN).read_timeout(30).write_timeout(30)
-    if settings.PROXY_URL: builder.proxy_url(settings.PROXY_URL)
-    tg_app = builder.build()
-    tg_app.bot_data['settings'] = settings
+# Переменные приложения
+# bot = None # No longer needed globally if application handles it
+# radio_manager = None # No longer needed globally if application handles it
 
-    radio_manager = RadioManager(bot=tg_app.bot, settings=settings, downloader=downloader)
-    
-    # Передаем spotify_service в хендлеры (FIXED)
-    setup_handlers(
-        app=tg_app, 
-        radio=radio_manager, 
-        settings=settings, 
-        downloader=downloader,
-        spotify_service=spotify_service 
-    )
-    
-    commands = [
-        BotCommand("radio", "🎲 Случайная волна"),
-        BotCommand("play", "🔎 Найти трек"),
-        BotCommand("stop", "🛑 Остановить"),
-        BotCommand("admin", "⚙️ Настройки"),
-        BotCommand("status", "📊 Статус")
-    ]
-    await tg_app.bot.set_my_commands(commands)
-    
-    await tg_app.initialize()
-    await tg_app.start()
-    
-    if settings.WEBHOOK_URL:
-        await tg_app.bot.set_webhook(url=settings.WEBHOOK_URL)
-        logger.info(f"🔗 Webhook: {settings.WEBHOOK_URL}")
-    
-    app.state.tg_app = tg_app
-    app.state.radio_manager = radio_manager
-    app.state.cache = cache
-    
-    yield
-    
-    await radio_manager.stop_all()
-    await tg_app.stop()
-    await tg_app.shutdown()
-    await cache.close()
+# Статика
+Path("static").mkdir(exist_ok=True)
+app.mount("/", StaticFiles(directory="static", html=True), name="static") # Changed to serve index.html directly from root
 
-app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
-@app.get("/api/ai/dj")
-async def ai_dj_generate(prompt: str, request: Request):
-    logger.info(f"[AI Web] Prompt: {prompt}")
-    intro = await ChatManager.get_response(0, f"Intro for song: {prompt}", "User") or "Playing your track!"
-    downloader = request.app.state.downloader
-    tracks = await downloader.search(query=prompt, limit=10)
-    return {"dj_intro": intro, "playlist": tracks}
-
-@app.get("/stream/{video_id}")
-async def stream_audio(video_id: str, request: Request):
-    settings = request.app.state.settings
-    downloader = request.app.state.downloader
-    file_path = settings.DOWNLOADS_DIR / f"{video_id}.mp3"
-
-    if file_path.exists():
-        logger.info(f"[{video_id}] Serving cached file.")
-        return FileResponse(file_path, media_type="audio/mpeg")
+@app.on_event("startup")
+async def startup_event():
+    # global bot, radio_manager # Removed global if application is used
+    from telegram.ext import Application
+    from handlers import setup_handlers
     
-    logger.info(f"[{video_id}] File not found in cache. Initiating download...")
-    # This call respects the semaphore from YouTubeDownloader
-    download_result = await downloader.download(video_id) 
+    application = Application.builder().token(settings.BOT_TOKEN).build() # Use BOT_TOKEN from settings
+    # bot = application.bot # Not needed globally
+    radio_manager = RadioManager(application.bot, settings, downloader)
+    setup_handlers(application, radio_manager, downloader, spotify_service=None) # Added spotify_service=None to match setup_handlers signature
     
-    if download_result and download_result.success and file_path.exists():
-        logger.info(f"[{video_id}] Download successful. Serving file.")
-        return FileResponse(file_path, media_type="audio/mpeg")
-    else:
-        logger.error(f"[{video_id}] Failed to download or find file after download.")
-        return JSONResponse(status_code=500, content={"error": "Failed to stream audio."})
+    await application.initialize()
+    await application.start()
+    
+    # Webhook
+    try:
+        webhook_url = f"{settings.BASE_URL}/telegram"
+        await application.bot.set_webhook(webhook_url)
+    except Exception as e:
+        logger.warning(f"Webhook setup failed (local test?): {e}")
 
-@app.get("/api/health")
-async def health(): return {"status": "ok", "uptime": get_uptime()}
+    app.state.application = application # Store application in app.state for webhook
+    app.state.radio_manager = radio_manager # Store radio_manager in app.state for access
+
+# --- НОВЫЕ API ДЛЯ ТВОЕГО ПЛЕЕРА ---
 
 @app.get("/api/player/playlist")
-async def get_playlist(query: str, request: Request):
-    downloader = request.app.state.downloader
-    tracks = await downloader.search(query=query, limit=15)
-    if tracks:
-        for track in tracks:
-            asyncio.create_task(downloader.download(track.identifier, track))
-    return {"playlist": tracks}
+async def api_playlist(query: str):
+    """
+    Поиск музыки для плеера.
+    Возвращает JSON в формате, который ждет твой скрипт: { playlist: [...] }
+    """
+    if not query: return {"playlist": []}
+    
+    tracks = await downloader.search(query, limit=20)
+    
+    return {
+        "playlist": [
+            {
+                "identifier": t.identifier,
+                "title": t.title,
+                "artist": getattr(t, 'uploader', getattr(t, 'artist', 'Unknown')),
+                "duration": t.duration,
+                "cover": t.thumbnail_url
+            }
+            for t in tracks
+        ]
+    }
 
+@app.get("/api/ai/dj")
+async def api_ai_dj(prompt: str):
+    """
+    AI DJ: Генерирует поисковый запрос из промпта и возвращает плейлист.
+    """
+    if not prompt: return {"playlist": []}
+    
+    # Спрашиваем AI, что имел в виду пользователь
+    analysis = await ai_manager.analyze_message(prompt)
+    search_query = analysis.get("query", prompt) if analysis else prompt
+    
+    # Ищем музыку по сгенерированному запросу
+    return await api_playlist(search_query)
+
+@app.get("/stream/{video_id}")
+async def stream_track(video_id: str):
+    """
+    Стриминг трека.
+    Формат URL: /stream/VIDEO_ID
+    """
+    final_path = settings.DOWNLOADS_DIR / f"{video_id}.mp3"
+    
+    # 1. Если файл есть - стримим его
+    if final_path.exists() and final_path.stat().st_size > 10000:
+        return FileResponse(final_path, media_type="audio/mpeg")
+
+    # 2. Если нет - качаем
+    # (В реальном продакшене тут лучше возвращать 202 Accepted или ждать)
+    logger.info(f"🌐 Web Player: Downloading {video_id}...")
+    result = await downloader.download(video_id)
+    
+    if result.success and result.file_path:
+        return FileResponse(result.file_path, media_type="audio/mpeg")
+    
+    return JSONResponse(status_code=404, content={"error": "Download failed"})
+
+# Webhook Handler
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
-    tg_app = request.app.state.tg_app
     try:
         data = await request.json()
-        update = Update.de_json(data, tg_app.bot)
-        asyncio.create_task(tg_app.process_update(update))
-    except (json.JSONDecodeError, ClientDisconnect): pass
-    except Exception as e: logger.error(f"Webhook Error: {e!r}")
-    return {"ok": True}
+        from telegram import Update
+        application = app.state.application
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+    return {"status": "ok"}
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# Root
+@app.get("/")
+async def root():
+    if Path("static/index.html").exists():
+        return FileResponse("static/index.html")
+    return {"status": "Aurora Bot Active"}
