@@ -60,11 +60,11 @@ class YouTubeDownloader:
                 
                 if duration > 900: continue
 
-                # 👇 ИСПРАВЛЕНО: Вернули uploader
+                # 👇 ИСПРАВЛЕНО: Теперь используем 'artist'
                 track = TrackInfo(
                     identifier=video_id,
                     title=item.get('title'),
-                    uploader=artists,  # <--- ВЕРНУЛИ КАК БЫЛО
+                    artist=artists,  # <--- ИСПРАВЛЕНО
                     duration=duration,
                     thumbnail_url=item.get('thumbnails', [{}])[-1].get('url'),
                     source="ytmusic"
