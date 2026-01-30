@@ -1,1 +1,46 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aurora Player</title>
+    <link rel="stylesheet" href="style.min.css">
+</head>
+<body>
+    <div id="player">
+        <div id="info">
+            <div id="title">Aurora Player</div>
+            <div id="artist">Ready</div>
+        </div>
+        <div id="controls">
+            <button id="btn-prev">⏮</button>
+            <button id="btn-play">▶</button>
+            <button id="btn-next">⏭</button>
+        </div>
+        <div id="progress">
+            <div id="progress-bar"></div>
+        </div>
+        <div id="buttons">
+            <button id="btn-playlist">Плейлист</button>
+            <button id="btn-genres">Жанры</button>
+            <button id="btn-ai">AI</button>
+        </div>
+    </div>
 
+    <div id="drawer-container">
+        <div id="overlay"></div>
+        <div id="drawer" class="drawer">
+            <h3 id="drawer-title"></h3>
+            <div id="drawer-content"></div>
+        </div>
+    </div>
+    
+    <div id="ai-modal" class="modal">
+        <input id="ai-input" placeholder="Что включить?">
+        <button id="btn-ai-send">Пуск</button>
+        <button id="btn-ai-cancel">Отмена</button>
+    </div>
+
+    <script src="app.min.js"></script>
+</body>
+</html>
