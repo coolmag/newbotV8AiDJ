@@ -19,6 +19,11 @@ class TrackInfo:
     source: Source = Source.YOUTUBE
     thumbnail_url: Optional[str] = None
     
+    @property
+    def author(self) -> str:
+        """Alias for compatibility with radio.py"""
+        return self.artist
+    
     @classmethod
     def from_yt_info(cls, info: Dict[str, Any]) -> Optional["TrackInfo"]:
         if not info:
