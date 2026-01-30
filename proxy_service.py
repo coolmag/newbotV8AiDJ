@@ -77,7 +77,10 @@ class ProxyManager:
                 logger.debug(f"Proxy test to google.com successful via {proxy_url}")
                 return True
         except httpx.RequestError as e:
-            logger.warning(f"Proxy connection test failed for {proxy_url}: {e}")
+            error_details = f"{e.__class__.__name__}: {e}"
+            if e.__cause__:
+                error_details += f" (Cause: {e.__cause__.__class__.__name__}: {e.__cause__})"
+            logger.warning(f"Proxy connection test failed for {proxy_url}: {error_details}")
             return False
         except Exception as e:
             logger.error(f"Unexpected error during proxy test for {proxy_url}: {e}")
