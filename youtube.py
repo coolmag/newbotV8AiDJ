@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🎵 YouTube Music Edition (v42 - Correct JS Runtime Format).
-    Fixes: Invalid js_runtimes format. Now uses ['node'].
+    🎵 YouTube Music Edition (v43 - 2026 Fix).
+    Fixes: js_runtimes format + updated player clients for 2026
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
@@ -28,15 +28,20 @@ class YouTubeDownloader:
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
         if kwargs.get('decade'):
             query = f"{query} {kwargs['decade']}"
-        if not query or not query.strip(): return []
+        if not query or not query.strip(): 
+            return []
         logger.info(f"🔎 YTMusic Search: {query}")
         loop = asyncio.get_running_loop()
         try:
-            search_results = await loop.run_in_executor(None, lambda: self.ytmusic.search(query, filter="songs", limit=limit))
+            search_results = await loop.run_in_executor(
+                None, 
+                lambda: self.ytmusic.search(query, filter="songs", limit=limit)
+            )
             results = []
             for item in search_results:
                 video_id = item.get('videoId')
-                if not video_id: continue
+                if not video_id: 
+                    continue
                 artists = ", ".join([a['name'] for a in item.get('artists', [])])
                 duration_text = item.get('duration', '0:00')
                 try:
@@ -44,7 +49,8 @@ class YouTubeDownloader:
                     duration = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else int(parts[0])
                 except (ValueError, TypeError):
                     duration = 0
-                if duration > 900: continue
+                if duration > 900: 
+                    continue
                 track = TrackInfo(
                     identifier=video_id,
                     title=item.get('title'),
@@ -60,79 +66,152 @@ class YouTubeDownloader:
             logger.error(f"❌ YTMusic Search error: {e}")
             return []
 
+    def _get_base_opts(self, temp_path: str) -> dict:
+        """Базовые опции для yt-dlp (2026 формат)"""
+        return {
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
+            'outtmpl': temp_path,
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'socket_timeout': 30,
+            'retries': 3,
+            'fragment_retries': 3,
+            # ✅ ПРАВИЛЬНЫЙ ФОРМАТ 2026: словарь с конфигом
+            'js_runtimes': {
+                'node': {},  # Пустой конфиг = дефолтные настройки
+            },
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192'
+            }],
+        }
+
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         
         if final_path.exists() and final_path.stat().st_size > 10000:
             logger.info(f"✅ Cache hit for {video_id}")
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
+        
         async with self.semaphore:
             await asyncio.sleep(random.uniform(2, 5))
-            logger.info(f"🎧 Downloading {video_id} (YTM Web Mode)...")
-            return await self._download_direct(video_id, final_path, track_info)
+            logger.info(f"🎧 Downloading {video_id}...")
+            
+            # Пробуем разные методы по очереди
+            methods = [
+                ("WEB_MUSIC", self._download_web_music),
+                ("ANDROID_MUSIC", self._download_android_music),
+                ("MWEB", self._download_mweb),
+                ("TVHTML5", self._download_tv),
+                ("DEFAULT", self._download_default),
+            ]
+            
+            for method_name, method_func in methods:
+                try:
+                    logger.info(f"--> Trying method: {method_name}")
+                    result = await method_func(video_id, final_path, track_info)
+                    if result.success:
+                        logger.info(f"✅ Success with method: {method_name}")
+                        return result
+                    else:
+                        logger.warning(f"Method {method_name} failed softly, trying next.")
+                except Exception as e:
+                    logger.warning(f"❌ Method {method_name} failed with exception: {e}")
+                    continue
+            
+            logger.error(f"❌ All methods failed for {video_id}")
+            return DownloadResult(success=False, error_message="All download methods failed")
 
-    async def _download_direct(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
-        temp_path = str(target_path).replace(".mp3", "_temp")
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': temp_path,
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'js_runtimes': ['node'], # Correct format: list of runtimes
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['WEB_REMIX'],
-                }
-            },
-            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
+    async def _download_web_music(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
+        """Метод 1: YouTube Music Web Client"""
+        temp_path = str(target_path).replace(".mp3", "_webmusic")
+        opts = self._get_base_opts(temp_path)
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['web_music'],
+            }
         }
+        url = f"https://music.youtube.com/watch?v={video_id}"
+        return await self._execute_download(opts, url, target_path, temp_path, track_info)
+
+    async def _download_android_music(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
+        """Метод 2: Android Music Client (обычно работает лучше)"""
+        temp_path = str(target_path).replace(".mp3", "_android")
+        opts = self._get_base_opts(temp_path)
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['android_music', 'android'],
+            }
+        }
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        return await self._execute_download(opts, url, target_path, temp_path, track_info)
+
+    async def _download_mweb(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
+        """Метод 3: Mobile Web Client"""
+        temp_path = str(target_path).replace(".mp3", "_mweb")
+        opts = self._get_base_opts(temp_path)
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['mweb'],
+            }
+        }
+        url = f"https://m.youtube.com/watch?v={video_id}"
+        return await self._execute_download(opts, url, target_path, temp_path, track_info)
+
+    async def _download_tv(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
+        """Метод 4: TV HTML5 Client"""
+        temp_path = str(target_path).replace(".mp3", "_tv")
+        opts = self._get_base_opts(temp_path)
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['tv', 'tv_embedded'],
+            }
+        }
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        return await self._execute_download(opts, url, target_path, temp_path, track_info)
+
+    async def _download_default(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
+        """Метод 5: Дефолтный клиент (без указания)"""
+        temp_path = str(target_path).replace(".mp3", "_default")
+        opts = self._get_base_opts(temp_path)
+        # Без extractor_args - пусть yt-dlp сам выберет лучший вариант
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        return await self._execute_download(opts, url, target_path, temp_path, track_info)
+
+    async def _execute_download(self, opts: dict, url: str, target_path: Path, 
+                                 temp_path: str, track_info: TrackInfo) -> DownloadResult:
+        """Выполнить скачивание и обработать результат"""
         try:
             loop = asyncio.get_running_loop()
-            url = f"https://music.youtube.com/watch?v={video_id}"
-            await loop.run_in_executor(None, lambda: self._run_yt_dlp(ydl_opts, url))
-            result_path = Path(temp_path + ".mp3")
-            if not result_path.exists(): result_path = Path(temp_path)
-            if result_path.exists() and result_path.stat().st_size > 10000:
-                if result_path != target_path:
-                    if target_path.exists(): target_path.unlink()
-                    result_path.rename(target_path)
-                return DownloadResult(success=True, file_path=target_path, track_info=track_info)
-            else:
-                logger.warning(f"YTM Web client failed for {video_id}, retrying with fallback...")
-                return await self._download_fallback(video_id, target_path, track_info)
+            await loop.run_in_executor(None, lambda: self._run_yt_dlp(opts, url))
+            
+            possible_paths = [
+                Path(temp_path + ".mp3"),
+                Path(temp_path),
+            ]
+            
+            for result_path in possible_paths:
+                if result_path.exists() and result_path.stat().st_size > 10000:
+                    if result_path != target_path:
+                        if target_path.exists():
+                            target_path.unlink()
+                        result_path.rename(target_path)
+                    return DownloadResult(success=True, file_path=target_path, track_info=track_info)
+            
+            for p in possible_paths:
+                if p.exists():
+                    p.unlink()
+            
+            return DownloadResult(success=False, error_message="Download produced no valid file")
         except Exception as e:
-            logger.error(f"❌ Download error (YTM Web Client): {e}")
-            logger.warning(f"Trying fallback for {video_id} after error.")
-            return await self._download_fallback(video_id, target_path, track_info)
+            # This handles errors within _run_yt_dlp, like network issues or yt-dlp crashes
+            logger.error(f"Exception during _execute_download for {url}: {e}")
+            return DownloadResult(success=False, error_message=str(e))
 
-    async def _download_fallback(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
-        """Запасной вариант: стандартный веб-клиент yt-dlp с JS"""
-        temp_path = str(target_path).replace(".mp3", "_temp_fb")
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': temp_path,
-            'quiet': True,
-            'nocheckcertificate': True,
-            'js_runtimes': ['node'], # Correct format: list of runtimes
-            'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
-        }
-        try:
-            logger.info(f".... Trying fallback download for {video_id} (default web client with JS)")
-            loop = asyncio.get_running_loop()
-            url = f"https://www.youtube.com/watch?v={video_id}"
-            await loop.run_in_executor(None, lambda: self._run_yt_dlp(ydl_opts, url))
-            result_path = Path(temp_path + ".mp3")
-            if result_path.exists() and result_path.stat().st_size > 10000:
-                if target_path.exists(): target_path.unlink()
-                result_path.rename(target_path)
-                logger.info(f"✅ Success via Fallback for {video_id}")
-                return DownloadResult(success=True, file_path=target_path, track_info=track_info)
-        except Exception as e:
-            logger.error(f"❌ Fallback download error: {e}")
-        logger.error(f"All download methods failed for {video_id}")
-        return DownloadResult(success=False, error_message="All download methods failed")
 
-    def _run_yt_dlp(self, opts, url):
+    def _run_yt_dlp(self, opts: dict, url: str):
+        """Синхронный запуск yt-dlp"""
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
