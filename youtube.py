@@ -2,6 +2,7 @@ import asyncio
 import logging
 import random
 import inspect
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -16,11 +17,11 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🎵 Hybrid Edition (v46 Full).
+    🎵 Hybrid Edition (v47 - Cookie Auth & FFmpeg Guard).
     1. Search: YTMusic.
     2. Download Strategy:
-       - Try YT with V2Ray Proxy.
-       - IF FAIL -> Try SoundCloud download (Fallback).  <-- REMOVED
+       - Use V2Ray Proxy + Browser Cookies for reliability.
+       - Guard against missing FFmpeg.
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
@@ -85,6 +86,11 @@ class YouTubeDownloader:
             return []
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
+        # === FFmpeg Guard ===
+        if not shutil.which("ffmpeg"):
+            logger.critical("❌ FFmpeg not found in PATH. Cannot process downloads.")
+            return DownloadResult(success=False, error_message="FFmpeg not installed")
+
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
         
         if final_path.exists() and final_path.stat().st_size > 10000:
@@ -127,6 +133,13 @@ class YouTubeDownloader:
         
         if self._proxy_manager.active_proxy_url:
             opts['proxy'] = self._proxy_manager.active_proxy_url
+
+        # === Cookie Authentication ===
+        if self._settings.COOKIES_CONTENT:
+            logger.info("🍪 Using provided COOKIES_CONTENT for authentication.")
+            # This assumes COOKIES_CONTENT is a raw cookie string.
+            # If it's a path to a cookie file, `cookiefile` option would be used.
+            opts['cookie'] = self._settings.COOKIES_CONTENT
 
         # Пробуем разные клиенты
         clients = [['android', 'android_music'], ['ios'], ['tv_embedded']]

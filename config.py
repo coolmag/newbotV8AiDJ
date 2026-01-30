@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     PROXY_URL: Optional[str] = None
     SPOTIFY_CLIENT_ID: Optional[str] = None
     SPOTIFY_CLIENT_SECRET: Optional[str] = None
+
     
     COBALT_INSTANCES: Union[List[str], str, None] = None
     PIPED_INSTANCES: Union[List[str], str, None] = None
