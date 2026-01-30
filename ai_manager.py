@@ -3,29 +3,31 @@ import json
 from typing import Optional
 import httpx
 import google.generativeai as genai
-from config import Settings
+from config import get_settings
 
 logger = logging.getLogger("ai_manager")
+settings = get_settings() # Create a single, cached settings instance
 
 class AIManager:
     """
-    🧠 AI Manager (Free Tier 2026 Edition).
+    🧠 AI Manager (v2 - Corrected Settings Handling).
     Strategies:
     1. OpenRouter Free Models (Gemini, Llama, Mistral with ':free' tag).
     2. Google Gemini API (Direct fallback).
+    3. Regex Fallback for ultimate reliability.
     """
     
     def __init__(self):
         self.providers = []
         
         # Настраиваем OpenRouter (если есть ключ)
-        if Settings().OPENROUTER_API_KEY: # Use Settings() to get current settings
+        if settings.OPENROUTER_API_KEY:
             self.providers.append("OpenRouter")
             
         # Настраиваем Google Gemini (если есть ключ)
-        if Settings().GEMINI_API_KEY: # Use Settings() to get current settings
+        if settings.GEMINI_API_KEY:
             try:
-                genai.configure(api_key=Settings().GEMINI_API_KEY)
+                genai.configure(api_key=settings.GEMINI_API_KEY)
                 self.providers.append("Gemini")
             except Exception as e:
                 logger.error(f"Failed to configure Gemini: {e}")
@@ -64,16 +66,15 @@ class AIManager:
     async def _call_openrouter(self, prompt: str) -> Optional[dict]:
         """Использует только БЕСПЛАТНЫЕ модели OpenRouter"""
         
-        # Список моделей, которые всегда бесплатны (на 2025-2026)
         free_models = [
-            "google/gemini-2.0-flash-exp:free", # Самая мощная и быстрая
+            "google/gemini-2.0-flash-exp:free",
             "google/gemini-2.0-flash-thinking-exp:free",
             "meta-llama/llama-3.2-3b-instruct:free",
             "huggingfaceh4/zephyr-7b-beta:free",
         ]
         
         headers = {
-            "Authorization": f"Bearer {Settings().OPENROUTER_API_KEY}",
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://railway.app", 
         }
@@ -96,6 +97,7 @@ class AIManager:
                     if resp.status_code == 200:
                         data = resp.json()
                         content = data['choices'][0]['message']['content']
+                        logger.info(f"OpenRouter ({model}) succeeded.")
                         return self._parse_json(content)
                     else:
                         logger.warning(f"OpenRouter {model} failed: {resp.status_code}")
@@ -107,8 +109,9 @@ class AIManager:
 
     async def _call_gemini(self, prompt: str) -> Optional[dict]:
         try:
-            model = genai.GenerativeModel('gemini-2.0-flash') # Используем быструю версию
+            model = genai.GenerativeModel('gemini-2.0-flash')
             response = await model.generate_content_async(prompt)
+            logger.info("Gemini (direct) succeeded.")
             return self._parse_json(response.text)
         except Exception as e:
             logger.error(f"Gemini API error: {e}")
@@ -119,28 +122,27 @@ class AIManager:
         logger.info("⚠️ AI failed. Using Regex Fallback.")
         text_lower = text.lower()
         
-        # Радио/Жанры
         radio_keywords = ['радио', 'radio', 'play', 'играй', 'включи', 'mix', 'fm']
         if any(k in text_lower for k in radio_keywords):
-            # Пытаемся вырезать ключевое слово
             for k in radio_keywords:
                 text_lower = text_lower.replace(k, '')
             query = text_lower.strip() or "top hits"
             return {"intent": "radio", "query": query}
             
-        # По умолчанию считаем поиском трека
         return {"intent": "search", "query": text}
 
     def _parse_json(self, text: str) -> Optional[dict]:
-        """Очищает и парсит JSON"""
+        """Очищает и парсит JSON из ответа AI."""
         try:
-            # Очистка от markdown ```json ... ```
             cleaned = text.strip()
-            if cleaned.startswith("```"):
+            if cleaned.startswith("```json"):
                 cleaned = cleaned.split("\n", 1)[1]
                 if cleaned.endswith("```"):
                     cleaned = cleaned.rsplit("\n", 1)[0]
-            
+            elif cleaned.startswith("```"):
+                cleaned = cleaned[3:-3]
+
             return json.loads(cleaned)
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to parse AI JSON response: {e} | Response: '{text[:100]}'")
             return None
