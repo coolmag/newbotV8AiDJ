@@ -3,28 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aurora Player</title>
+    <title>Aurora Tape</title>
     <link rel="stylesheet" href="style.min.css">
+    <link rel="icon" href="favicon.svg">
 </head>
 <body>
-    <div id="player">
-        <div id="info">
-            <div id="title">Aurora Player</div>
-            <div id="artist">Ready</div>
+    <div id="cassette">
+        <div id="cassette-top"></div>
+        <div id="cassette-main">
+            <div id="label">
+                <div id="title">AURORA PLAYER</div>
+                <div id="artist">READY</div>
+                <div id="progress"><div id="progress-bar"></div></div>
+            </div>
+            <div id="window">
+                <div class="reel-hole left"><div id="reel-left" class="reel"></div></div>
+                <div class="reel-hole right"><div id="reel-right" class="reel"></div></div>
+            </div>
         </div>
-        <div id="controls">
-            <button id="btn-prev">⏮</button>
-            <button id="btn-play">▶</button>
-            <button id="btn-next">⏭</button>
-        </div>
-        <div id="progress">
-            <div id="progress-bar"></div>
-        </div>
-        <div id="buttons">
-            <button id="btn-playlist">Плейлист</button>
-            <button id="btn-genres">Жанры</button>
-            <button id="btn-ai">AI</button>
-        </div>
+    </div>
+
+    <div id="controls">
+        <button id="btn-prev">⏮</button>
+        <button id="btn-play">▶</button>
+        <button id="btn-next">⏭</button>
+        <button id="btn-playlist">☰</button>
+        <button id="btn-ai">🤖</button>
     </div>
 
     <div id="drawer-container">
