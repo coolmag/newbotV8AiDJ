@@ -163,4 +163,4 @@ async def telegram_webhook(request: Request):
     except Exception as e: logger.error(f"Webhook Error: {e!r}")
     return {"ok": True}
 
-app.mount("/", StaticFiles(directory="webapp", html=True), name="static")
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
