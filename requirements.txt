@@ -14,3 +14,4 @@ beautifulsoup4
 spotipy
 ffmpeg-python
 brotli
+pycryptodomex
