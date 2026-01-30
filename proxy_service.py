@@ -71,7 +71,7 @@ class ProxyManager:
     async def _test_proxy_connection(self, proxy_url: str) -> bool:
         """Tests the proxy connection by making a request to a known reliable service."""
         try:
-            async with httpx.AsyncClient(proxies={"http://": proxy_url, "https://": proxy_url}, timeout=10) as client:
+            async with httpx.AsyncClient(proxies={"http://": proxy_url, "https://": proxy_url}, timeout=20) as client:
                 response = await client.get("https://www.google.com", follow_redirects=True)
                 response.raise_for_status() # Raise an exception for bad status codes
                 logger.debug(f"Proxy test to google.com successful via {proxy_url}")
