@@ -1,157 +1,161 @@
+// player.js - Optimized for Railway
 import { store } from './store.js';
-import { Visualizer } from './visualizer.js';
+import { api } from './api.js';
+import { ui } from './ui.js';
+import { visualizer } from './visualizer.js';
 
-const audio = document.getElementById('audio-player');
-let onStatusChange = null;
-let isBassBoosted = false;
+class Player {
+    constructor() {
+        this.audio = new Audio();
+        this.isPlaying = false;
+        this.currentTrackId = null;
+        this.loading = false;
+        
+        // Очередь воспроизведения на клиенте
+        this.queue = [];
+        this.currentIndex = -1;
 
-function setupAudioContext() {
-    if (audio) {
-        audio.setAttribute('playsinline', 'true');
-        audio.setAttribute('webkit-playsinline', 'true');
-        audio.preload = 'auto';
+        this.setupAudioListeners();
+        this._playDebounced = this._debounce(this._actualPlay.bind(this), 300); // 300ms debounce
     }
-}
 
-function updateReelsState(playing) {
-    // ВАЖНО: Ищем правильный класс для анимации
-    const reels = document.querySelectorAll('.reel-hub');
-    reels.forEach(r => {
-        if (playing) r.classList.add('spinning');
-        else r.classList.remove('spinning');
-    });
-    
-    // Лампочка на кнопке
-    const playBtn = document.getElementById('btn-play-pause');
-    if (playBtn) {
-        if (playing) playBtn.classList.add('active');
-        else playBtn.classList.remove('active');
+    setupAudioListeners() {
+        this.audio.addEventListener('ended', () => this.next());
+        
+        this.audio.addEventListener('timeupdate', () => {
+            ui.updateProgress(this.audio.currentTime, this.audio.duration);
+        });
+
+        this.audio.addEventListener('canplay', () => {
+            this.loading = false;
+            ui.setLoading(false);
+            if (this.isPlaying) this.audio.play().catch(e => console.error("Audio play failed after canplay:", e));
+        });
+        
+        this.audio.addEventListener('error', (e) => {
+             console.error("Audio Error:", e);
+             this.loading = false;
+             ui.setLoading(false);
+             ui.showToast("Ошибка воспроизведения. Пробую следующий...", "error");
+             setTimeout(() => this.next(), 2000);
+        });
     }
-}
 
-function setupAudioListeners() {
-    audio.addEventListener('loadstart', () => reportStatus('loading', 'LOADING...'));
-    audio.addEventListener('waiting', () => reportStatus('loading', 'BUFFERING...'));
-    
-    audio.addEventListener('canplay', () => {
-        reportStatus('ready', 'TAPE READY');
-        if (store.isPlaying) safePlay();
-    });
-    
-    audio.addEventListener('play', () => {
-        store.isPlaying = true;
-        updateReelsState(true);
-        reportStatus('playing', 'PLAYING');
-        updateMediaSession();
-    });
-    
-    audio.addEventListener('pause', () => {
-        store.isPlaying = false;
-        updateReelsState(false);
-        reportStatus('paused', 'STOPPED');
-    });
-    
-    audio.addEventListener('error', (e) => {
-        console.warn("Audio Error, skipping...");
-        updateReelsState(false);
-        setTimeout(() => nextTrack(), 1000);
-    });
-    
-    audio.addEventListener('ended', () => {
-        updateReelsState(false);
-        nextTrack();
-    });
-}
+    _debounce(func, delay) {
+        let timeout;
+        return function(...args) {
+            const context = this;
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(context, args), delay);
+        };
+    }
 
-async function safePlay() {
-    try {
-        await audio.play();
-        updateMediaSession();
-        updateReelsState(true);
-    } catch (e) {
-        if (e.name !== 'AbortError') {
-            console.warn("Play error:", e);
-            store.isPlaying = false;
-            updateReelsState(false);
+    async _actualPlay(track) {
+        if (!track) return;
+
+        // Если это тот же трек, просто переключаем паузу
+        if (this.currentTrackId === track.id) {
+            this.togglePlay();
+            return;
+        }
+
+        // Защита: Если уже идет загрузка другого трека - отменяем/ждем
+        if (this.loading) {
+            this.audio.pause();
+            this.audio.src = ""; // Stop current loading
+        }
+
+        this.currentTrackId = track.id;
+        this.loading = true;
+        ui.setLoading(true);
+        ui.updatePlayerInfo(track);
+        
+        // Обновляем UI
+        this.isPlaying = true;
+        ui.updatePlayButton(true);
+
+        try {
+            // 1. Получаем ссылку на поток
+            // Важно: api.getStreamUrl не должен качать файл! 
+            // Он должен возвращать ссылку /api/stream/ID
+            const streamUrl = api.getStreamUrl(track.id);
+            
+            // 2. Устанавливаем источник. Браузер сам начнет буферизацию.
+            this.audio.src = streamUrl;
+            this.audio.crossOrigin = "anonymous"; // Для визуализатора
+            
+            // Запускаем визуализатор
+            visualizer.connect(this.audio);
+
+            await this.audio.play();
+            
+            // Обновляем глобальный стор
+            store.setCurrentTrack(track);
+
+        } catch (error) {
+            console.error('Play error:', error);
+            ui.showToast("Ошибка сервера. Попробуйте позже.", "error");
+            this.loading = false;
+            ui.setLoading(false);
+            this.isPlaying = false;
+            ui.updatePlayButton(false);
+        }
+    }
+
+    play(track) {
+        this._playDebounced(track);
+    }
+
+    togglePlay() {
+        if (this.audio.paused) {
+            this.audio.play().catch(e => console.error("Audio play failed on togglePlay:", e));
+            this.isPlaying = true;
+        } else {
+            this.audio.pause();
+            this.isPlaying = false;
+        }
+        ui.updatePlayButton(this.isPlaying);
+    }
+
+    next() {
+        // Логика переключения (берем из store или локальной очереди)
+        const nextTrack = store.getNextTrack();
+        if (nextTrack) {
+            this.play(nextTrack);
+        } else {
+            // Если треки кончились - можно запросить "Радио" у сервера
+            this.requestRadioNext();
+        }
+    }
+
+    prev() {
+        const prevTrack = store.getPrevTrack();
+        if (prevTrack) this.play(prevTrack);
+    }
+    
+    // Запрос к серверу, чтобы сгенерировать следующий трек (как в боте)
+    async requestRadioNext() {
+        ui.showToast("Ищу музыку...", "info");
+        try {
+            // Тут можно дернуть ручку /api/radio/next
+            // Пока просто берем случайный из каталога
+            const randomTrack = await api.getRandomTrack(); 
+            if (randomTrack) this.play(randomTrack);
+        } catch (e) {
+            console.error(e);
+            ui.showToast("Не удалось найти случайный трек.", "error");
+        }
+    }
+
+    setVolume(value) {
+        this.audio.volume = value;
+    }
+    
+    seek(percent) {
+        if (this.audio.duration) {
+            this.audio.currentTime = this.audio.duration * percent;
         }
     }
 }
 
-function updateMediaSession() {
-    if (!('mediaSession' in navigator)) return;
-    const track = store.playlist[store.currentTrackIndex];
-    if (!track) return;
-    
-    navigator.mediaSession.metadata = new MediaMetadata({
-        title: track.title,
-        artist: track.artist,
-        album: 'Aurora AI Deck',
-        artwork: [{ src: 'favicon.svg', sizes: '512x512', type: 'image/svg+xml' }]
-    });
-
-    const handlers = [
-        ['play', () => { store.isPlaying = true; safePlay(); }],
-        ['pause', () => { store.isPlaying = false; audio.pause(); }],
-        ['previoustrack', () => prevTrack()],
-        ['nexttrack', () => nextTrack()],
-    ];
-    for (const [action, handler] of handlers) {
-        try { navigator.mediaSession.setActionHandler(action, handler); } catch (e) {}
-    }
-}
-
-function reportStatus(state, message) { if (onStatusChange) onStatusChange(state, message); }
-function setStatusCallback(fn) { onStatusChange = fn; }
-
-async function playTrack(index) {
-    if (index < 0 || index >= store.playlist.length) return;
-    store.currentTrackIndex = index;
-    const track = store.playlist[index];
-    store.isPlaying = true;
-    reportStatus('loading', `LOADING: ${track.title.substring(0,15)}...`);
-    audio.src = `/audio/${track.identifier}.mp3`;
-    updateMediaSession();
-    audio.load();
-    await safePlay();
-}
-
-function togglePlay() {
-    if (audio.paused) {
-        if (store.currentTrackIndex === -1 && store.playlist.length > 0) playTrack(0);
-        else safePlay();
-    } else { 
-        store.isPlaying = false;
-        audio.pause(); 
-    }
-}
-
-function nextTrack() {
-    let next = store.currentTrackIndex + 1;
-    if (next >= store.playlist.length) next = 0;
-    playTrack(next);
-}
-
-function prevTrack() {
-    let prev = store.currentTrackIndex - 1;
-    if (prev < 0) prev = store.playlist.length - 1;
-    playTrack(prev);
-}
-
-function seek(pct) {
-    if (!audio.duration) return;
-    audio.currentTime = audio.duration * pct;
-}
-
-function toggleBassBoost() {
-    isBassBoosted = !isBassBoosted;
-    Visualizer.setBassBoost(isBassBoosted);
-    return isBassBoosted;
-}
-
-setupAudioContext();
-setupAudioListeners();
-
-export const Player = {
-    playTrack, togglePlay, nextTrack, prevTrack, seek, getAudioElement: () => audio, setStatusCallback,
-    toggleBassBoost
-};
+export const player = new Player();
