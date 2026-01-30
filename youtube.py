@@ -9,6 +9,7 @@ from ytmusicapi import YTMusic
 from config import Settings
 from models import DownloadResult, TrackInfo
 from cache_service import CacheService
+from proxy_service import ProxyManager # Import ProxyManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class YouTubeDownloader:
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
         self.semaphore = asyncio.Semaphore(1)
         self.ytmusic = YTMusic() 
+        self._proxy_manager = ProxyManager(settings.V2RAY_PROXIES_FILE) # Initialize ProxyManager
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
         if kwargs.get('decade'):
@@ -68,7 +70,7 @@ class YouTubeDownloader:
 
     def _get_base_opts(self, temp_path: str) -> dict:
         """Базовые опции для yt-dlp (2026 формат)"""
-        return {
+        opts = { # Create opts dictionary
             'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'outtmpl': temp_path,
             'quiet': True,
@@ -87,6 +89,10 @@ class YouTubeDownloader:
                 'preferredquality': '192'
             }],
         }
+        if self._proxy_manager.active_proxy_url: # Add proxy if available
+            opts['proxy'] = self._proxy_manager.active_proxy_url
+            logger.debug(f"Using proxy for yt-dlp: {self._proxy_manager.active_proxy_url}")
+        return opts
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
         final_path = self._settings.DOWNLOADS_DIR / f"{video_id}.mp3"
@@ -95,35 +101,45 @@ class YouTubeDownloader:
             logger.info(f"✅ Cache hit for {video_id}")
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
         
-        async with self.semaphore:
-            await asyncio.sleep(random.uniform(2, 5))
-            logger.info(f"🎧 Downloading {video_id}...")
-            
-            # Пробуем разные методы по очереди
-            methods = [
-                ("WEB_MUSIC", self._download_web_music),
-                ("ANDROID_MUSIC", self._download_android_music),
-                ("MWEB", self._download_mweb),
-                ("TVHTML5", self._download_tv),
-                ("DEFAULT", self._download_default),
-            ]
-            
-            for method_name, method_func in methods:
-                try:
-                    logger.info(f"--> Trying method: {method_name}")
-                    result = await method_func(video_id, final_path, track_info)
-                    if result.success:
-                        logger.info(f"✅ Success with method: {method_name}")
-                        return result
-                    else:
-                        logger.warning(f"Method {method_name} failed softly, trying next.")
-                except Exception as e:
-                    logger.warning(f"❌ Method {method_name} failed with exception: {e}")
-                    continue
-            
-            logger.error(f"❌ All methods failed for {video_id}")
-            return DownloadResult(success=False, error_message="All download methods failed")
+        proxy_started = False
+        try:
+            proxy_started = await self._proxy_manager.start_proxy()
+            if not proxy_started:
+                logger.error("Failed to start proxy, aborting download.")
+                return DownloadResult(success=False, error_message="Failed to start V2Ray proxy")
 
+            async with self.semaphore:
+                await asyncio.sleep(random.uniform(2, 5))
+                logger.info(f"🎧 Downloading {video_id}...")
+                
+                # Пробуем разные методы по очереди
+                methods = [
+                    ("WEB_MUSIC", self._download_web_music),
+                    ("ANDROID_MUSIC", self._download_android_music),
+                    ("MWEB", self._download_mweb),
+                    ("TVHTML5", self._download_tv),
+                    ("DEFAULT", self._download_default),
+                ]
+                
+                for method_name, method_func in methods:
+                    try:
+                        logger.info(f"--> Trying method: {method_name}")
+                        result = await method_func(video_id, final_path, track_info)
+                        if result.success:
+                            logger.info(f"✅ Success with method: {method_name}")
+                            return result
+                        else:
+                            logger.warning(f"Method {method_name} failed softly, trying next.")
+                    except Exception as e:
+                        logger.warning(f"❌ Method {method_name} failed with exception: {e}")
+                        continue
+                
+                logger.error(f"❌ All methods failed for {video_id}")
+                return DownloadResult(success=False, error_message="All download methods failed")
+        finally:
+            if proxy_started:
+                self._proxy_manager.stop_proxy()
+    
     async def _download_web_music(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
         """Метод 1: YouTube Music Web Client"""
         temp_path = str(target_path).replace(".mp3", "_webmusic")

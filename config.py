@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     CACHE_DB_PATH: Path = BASE_DIR / "cache.db"
     COOKIES_FILE: Path = BASE_DIR / "cookies.txt"
     PROXIES_FILE: Path = BASE_DIR / "working_proxies.txt"
+    V2RAY_PROXIES_FILE: Path = BASE_DIR / "hiddify_compatible_v2ray_proxies.txt"
     
     LOG_LEVEL: str = "INFO"
     MAX_CONCURRENT_DOWNLOADS: int = 3
