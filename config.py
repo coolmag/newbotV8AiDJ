@@ -26,13 +26,14 @@ class Settings(BaseSettings):
     PROXY_URL: Optional[str] = None
     SPOTIFY_CLIENT_ID: Optional[str] = None
     SPOTIFY_CLIENT_SECRET: Optional[str] = None
+    OPENROUTER_API_KEY: str = ""
 
     
     COBALT_INSTANCES: Union[List[str], str, None] = None
     PIPED_INSTANCES: Union[List[str], str, None] = None
     INVIDIOUS_INSTANCES: Union[List[str], str, None] = None
 
-    GEMINI_API_KEY: Optional[str] = None
+    GOOGLE_API_KEY: str = ""
     VK_LOGIN: Optional[str] = None
     VK_PASSWORD: Optional[str] = None
     ADMIN_ID_LIST: List[int] = []
