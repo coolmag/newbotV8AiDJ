@@ -1,3 +1,4 @@
+# Version: 38 - Force Redeploy
 import logging
 import asyncio
 from contextlib import asynccontextmanager
@@ -118,14 +119,26 @@ async def ai_dj_generate(prompt: str, request: Request):
     tracks = await downloader.search(query=prompt, limit=10)
     return {"dj_intro": intro, "playlist": tracks}
 
-@app.get("/audio/{video_id}.mp3")
-async def get_audio_file(video_id: str, request: Request):
+@app.get("/stream/{video_id}")
+async def stream_audio(video_id: str, request: Request):
     settings = request.app.state.settings
+    downloader = request.app.state.downloader
     file_path = settings.DOWNLOADS_DIR / f"{video_id}.mp3"
+
+    if file_path.exists():
+        logger.info(f"[{video_id}] Serving cached file.")
+        return FileResponse(file_path, media_type="audio/mpeg")
     
-    if file_path.exists() and file_path.stat().st_size > 20000:
-        return FileResponse(file_path)
-    return JSONResponse(status_code=404, content={"error": "File not yet cached."})
+    logger.info(f"[{video_id}] File not found in cache. Initiating download...")
+    # This call respects the semaphore from YouTubeDownloader
+    download_result = await downloader.download(video_id) 
+    
+    if download_result and download_result.success and file_path.exists():
+        logger.info(f"[{video_id}] Download successful. Serving file.")
+        return FileResponse(file_path, media_type="audio/mpeg")
+    else:
+        logger.error(f"[{video_id}] Failed to download or find file after download.")
+        return JSONResponse(status_code=500, content={"error": "Failed to stream audio."})
 
 @app.get("/api/health")
 async def health(): return {"status": "ok", "uptime": get_uptime()}

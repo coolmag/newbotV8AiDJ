@@ -14,27 +14,25 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🎵 YouTube Music Edition (v35 Fix).
-    Fixes:
-    1. 'uploader' -> 'artist' in TrackInfo. (Corrected by me)
-    2. Empty query check (prevents HTTP 400).
+    🎵 YouTube Music Edition (v39 - Robust Fallback).
+    Combines the `artist` field fix with robust fallback logic.
+    Primary download client: 'tv_embedded' / 'ios'
+    Fallback download client: 'mweb'
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
         self._settings = settings
         self._cache = cache_service
         self._settings.DOWNLOADS_DIR.mkdir(exist_ok=True)
-        self.semaphore = asyncio.Semaphore(2)
+        self.semaphore = asyncio.Semaphore(1)
         self.ytmusic = YTMusic() 
 
     async def search(self, query: str, limit: int = 10, **kwargs) -> List[TrackInfo]:
-        """Поиск через YouTube Music API"""
+        """Поиск через YouTube Music API (стабильно)"""
         if kwargs.get('decade'):
             query = f"{query} {kwargs['decade']}"
             
-        # 👇 FIX: Проверка на пустой запрос
-        if not query or not query.strip():
-            return []
+        if not query or not query.strip(): return []
             
         logger.info(f"🔎 YTMusic Search: {query}")
         
@@ -49,24 +47,19 @@ class YouTubeDownloader:
                 
                 artists = ", ".join([a['name'] for a in item.get('artists', [])])
                 
-                # Парсинг длительности
                 duration_text = item.get('duration', '0:00')
                 try:
                     parts = duration_text.split(':')
-                    if len(parts) == 2:
-                        duration = int(parts[0]) * 60 + int(parts[1])
-                    else:
-                        duration = int(parts[0])
-                except:
+                    duration = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else int(parts[0])
+                except (ValueError, TypeError):
                     duration = 0
                 
                 if duration > 900: continue
 
-                # 👇 FIX: Используем 'artist' вместо 'uploader'/'author' (согласно models.py)
                 track = TrackInfo(
                     identifier=video_id,
                     title=item.get('title'),
-                    artist=artists,  # <--- ИСПРАВЛЕНО
+                    artist=artists,  # Correct field from models.py
                     duration=duration,
                     thumbnail_url=item.get('thumbnails', [{}])[-1].get('url'),
                     source="ytmusic"
@@ -78,7 +71,6 @@ class YouTubeDownloader:
 
         except Exception as e:
             logger.error(f"❌ YTMusic Search error: {e}")
-            # Удалена попытка вывода inspect.signature, так как она может порождать новые ошибки
             return []
 
     async def download(self, video_id: str, track_info: Optional[TrackInfo] = None) -> DownloadResult:
@@ -89,8 +81,9 @@ class YouTubeDownloader:
             return DownloadResult(success=True, file_path=final_path, track_info=track_info)
 
         async with self.semaphore:
-            await asyncio.sleep(random.randint(3, 8))
-            logger.info(f"⬇️ Downloading {video_id}...")
+            wait_time = random.randint(3, 8) # Slightly reduced wait
+            await asyncio.sleep(wait_time)
+            logger.info(f"📺 Downloading {video_id} (TV Mode)...")
             return await self._download_direct(video_id, final_path, track_info)
 
     async def _download_direct(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
@@ -102,19 +95,13 @@ class YouTubeDownloader:
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],
+                    'player_client': ['tv_embedded', 'ios'],
                     'player_skip': ['webpage', 'configs', 'js'],
                 }
             },
-            
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
+            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
         }
 
         try:
@@ -123,19 +110,50 @@ class YouTubeDownloader:
             await loop.run_in_executor(None, lambda: self._run_yt_dlp(ydl_opts, url))
             
             result_path = Path(temp_path + ".mp3")
-            if not result_path.exists():
-                 result_path = Path(temp_path)
+            if not result_path.exists(): result_path = Path(temp_path)
 
             if result_path.exists() and result_path.stat().st_size > 10000:
                 if result_path != target_path:
+                    if target_path.exists(): target_path.unlink()
                     result_path.rename(target_path)
                 return DownloadResult(success=True, file_path=target_path, track_info=track_info)
             else:
-                return DownloadResult(success=False, error_message="Download failed")
-
+                logger.warning(f"TV client failed for {video_id}, retrying with fallback...")
+                return await self._download_fallback(video_id, target_path, track_info)
         except Exception as e:
-            logger.error(f"❌ Download error: {e}")
-            return DownloadResult(success=False, error_message=str(e))
+            logger.error(f"❌ Download error (TV Client): {e}")
+            logger.warning(f"Trying fallback for {video_id} after error.")
+            return await self._download_fallback(video_id, target_path, track_info)
+
+    async def _download_fallback(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
+        """Запасной вариант: mweb (мобильный веб)"""
+        temp_path = str(target_path).replace(".mp3", "_temp_fb")
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': temp_path,
+            'quiet': True,
+            'nocheckcertificate': True,
+            'extractor_args': {'youtube': {'player_client': ['mweb']}},
+            'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
+        }
+        try:
+            logger.info(f".... Trying fallback download for {video_id} (mweb client)")
+            loop = asyncio.get_running_loop()
+            url = f"https://music.youtube.com/watch?v={video_id}"
+            await loop.run_in_executor(None, lambda: self._run_yt_dlp(ydl_opts, url))
+            
+            result_path = Path(temp_path + ".mp3")
+            if result_path.exists() and result_path.stat().st_size > 10000:
+                if result_path.exists():
+                    if target_path.exists(): target_path.unlink()
+                    result_path.rename(target_path)
+                logger.info(f"✅ Success via Fallback for {video_id}")
+                return DownloadResult(success=True, file_path=target_path, track_info=track_info)
+        except Exception as e:
+            logger.error(f"❌ Fallback download error: {e}")
+            
+        logger.error(f"All download methods failed for {video_id}")
+        return DownloadResult(success=False, error_message="All download methods failed")
 
     def _run_yt_dlp(self, opts, url):
         with yt_dlp.YoutubeDL(opts) as ydl:
