@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 
 class YouTubeDownloader:
     """
-    🎵 YouTube Music Edition (v40 - WEB_REMIX Client).
-    Strategy: Use the YouTube Music web client ('WEB_REMIX') as the primary download method.
-    Primary: 'WEB_REMIX'
-    Fallback: default 'web' client.
+    🎵 YouTube Music Edition (v41 - JS Runtime Fix).
+    Strategy: Explicitly tell yt-dlp to use the available 'node' JS runtime.
+    This is an attempt to fix 'Signature solving failed' and related issues.
     """
     
     def __init__(self, settings: Settings, cache_service: CacheService):
@@ -80,9 +79,10 @@ class YouTubeDownloader:
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
+            'js_runtimes': 'node', # Explicitly use node
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['WEB_REMIX'], # Primary Strategy: YouTube Music Web Client
+                    'player_client': ['WEB_REMIX'],
                 }
             },
             'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
@@ -107,20 +107,19 @@ class YouTubeDownloader:
             return await self._download_fallback(video_id, target_path, track_info)
 
     async def _download_fallback(self, video_id: str, target_path: Path, track_info: TrackInfo) -> DownloadResult:
-        """Запасной вариант: стандартный веб-клиент yt-dlp"""
+        """Запасной вариант: стандартный веб-клиент yt-dlp с JS"""
         temp_path = str(target_path).replace(".mp3", "_temp_fb")
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': temp_path,
             'quiet': True,
             'nocheckcertificate': True,
-            # No extractor_args to use yt-dlp default
+            'js_runtimes': 'node', # Explicitly use node
             'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
         }
         try:
-            logger.info(f".... Trying fallback download for {video_id} (default web client)")
+            logger.info(f".... Trying fallback download for {video_id} (default web client with JS)")
             loop = asyncio.get_running_loop()
-            # Using standard youtube.com URL for the default client
             url = f"https://www.youtube.com/watch?v={video_id}"
             await loop.run_in_executor(None, lambda: self._run_yt_dlp(ydl_opts, url))
             result_path = Path(temp_path + ".mp3")
